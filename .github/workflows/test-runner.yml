@@ -1,1 +1,15 @@
+name: Self-Hosted Runner Test
 
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Run Python App via Gradle
+        run: gradle runApp
