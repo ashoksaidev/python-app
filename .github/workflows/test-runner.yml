@@ -1,4 +1,4 @@
-name: Fast 1-min CI
+name: Python CI
 
 on:
   push:
