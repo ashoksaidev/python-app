@@ -8,24 +8,15 @@ on:
       - "src/**"
   workflow_dispatch:
 
-permissions:
-  contents: read
-
-concurrency:
-  group: selfhosted-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   build:
     runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 1
     steps:
-      - name: Checkout (shallow)
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: Run ultra-fast POC step
-        run: |
+      - run: |
           python3 src/main/python/app.py
           echo "✅ CI POC done."
