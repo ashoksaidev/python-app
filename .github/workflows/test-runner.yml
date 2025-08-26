@@ -1,16 +1,16 @@
-name: Self-Hosted Runner Test
+name: Fast CI
 
 on:
   push:
     branches: [ main ]
     paths:
-      - "src/**"
-      - "tests/**"
       - ".github/workflows/**"
       - "build.gradle"
       - "settings.gradle"
       - "gradle.properties"
-      - "requirements.txt"
+      - "gradle/wrapper/**"
+      - "gradlew"
+      - "gradlew.bat"
   pull_request:
 
 permissions:
@@ -23,61 +23,22 @@ concurrency:
 jobs:
   build:
     runs-on: [self-hosted, Linux, X64]
-    timeout-minutes: 15
-
+    timeout-minutes: 5
     steps:
       - name: Checkout (shallow)
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      # Cache Gradle wrapper + caches so we don't re-download Gradle every run
-      - name: Cache Gradle
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', 'gradle.properties') }}
-          restore-keys: ${{ runner.os }}-gradle-
-
-      # Faster than installing toolchains system-wide each time:
-      - name: Set up Java (for Gradle)
+      - name: Set up Java (cached)
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
+          cache: gradle
 
-      - name: Set up Python (with pip cache)
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          cache: 'pip'
-
-      - name: Install Python deps (venv)
-        run: |
-          python -m venv .venv
-          . .venv/bin/activate
-          python -m pip install -U pip
-          if [ -s requirements.txt ]; then pip install -r requirements.txt; fi
-
-      - name: Make Gradle wrapper executable
+      - name: Make wrapper executable
         run: chmod +x gradlew
 
-      # SPEED profile (uses Gradle caches & config cache). If you see OOMs, flip to the SAFE profile below.
-      - name: Run Python App via Gradle (FAST)
-        env:
-          GRADLE_OPTS: '-Dorg.gradle.jvmargs="-Xms256m -Xmx1024m"'
-        run: ./gradlew --max-workers=2 runApp -q
-
-      # Uncomment this SAFE profile if the daemon ever crashes on your VM:
-      # - name: Run Python App via Gradle (SAFE)
-      #   if: failure()   # only run if FAST failed, or replace the FAST step with this one
-      #   env:
-      #     GRADLE_OPTS: '-Dorg.gradle.jvmargs="-Xms256m -Xmx1024m"'
-      #   run: ./gradlew --no-daemon --max-workers=1 --stacktrace --info runApp
-
-      - name: Run tests (quiet)
-        run: |
-          . .venv/bin/activate
-          python -m pytest -q || true
+      - name: Run ultra-fast CI task
+        run: ./gradlew -q ci
