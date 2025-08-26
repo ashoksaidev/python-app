@@ -1,3 +1,4 @@
+# .github/workflows/test-runner.yml
 name: Self-Hosted Runner Test
 
 on:
@@ -6,13 +7,12 @@ on:
 
 jobs:
   build:
-    runs-on: [self-hosted, Linux, X64]  # match your runner's labels
+    runs-on: [self-hosted, Linux, X64]
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Java (required by Gradle)
-        uses: actions/setup-java@v4
+      - name: Set up Java (for Gradle)
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
@@ -25,5 +25,7 @@ jobs:
       - name: Make Gradle wrapper executable
         run: chmod +x gradlew
 
-      - name: Run Python App via Gradle
-        run: ./gradlew runApp
+      - name: Run Python App via Gradle (no daemon, fewer workers, more heap)
+        env:
+          GRADLE_OPTS: -Dorg.gradle.jvmargs="-Xms256m -Xmx1g"
+        run: ./gradlew --no-daemon --max-workers=1 --stacktrace --info runApp
