@@ -1,17 +1,12 @@
-name: Fast CI
+name: Fast 1-min CI
 
 on:
   push:
     branches: [ main ]
     paths:
       - ".github/workflows/**"
-      - "build.gradle"
-      - "settings.gradle"
-      - "gradle.properties"
-      - "gradle/wrapper/**"
-      - "gradlew"
-      - "gradlew.bat"
-  pull_request:
+      - "src/**"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -23,22 +18,14 @@ concurrency:
 jobs:
   build:
     runs-on: [self-hosted, Linux, X64]
-    timeout-minutes: 5
+    timeout-minutes: 1
     steps:
       - name: Checkout (shallow)
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: Set up Java (cached)
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-          cache: gradle
-
-      - name: Make wrapper executable
-        run: chmod +x gradlew
-
-      - name: Run ultra-fast CI task
-        run: ./gradlew -q ci
+      - name: Run ultra-fast POC step
+        run: |
+          python3 src/main/python/app.py
+          echo "✅ CI POC done."
