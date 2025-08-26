@@ -1,1 +1,1 @@
-print("Hello from Python (fast)!")
+print("Hello from a super-fast POC pipeline!")
