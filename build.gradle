@@ -1,9 +1,7 @@
 plugins { id 'base' }
 
-tasks.register('ci') {
-    group = 'verification'
-    description = 'Ultra-fast CI smoke step'
-    doLast {
-        println '✅ CI is alive and fast.'
-    }
+tasks.register('runApp', Exec) {
+    group = 'application'
+    description = 'Run tiny Python app'
+    commandLine('bash', '-lc', 'python3 src/main/python/app.py')
 }
