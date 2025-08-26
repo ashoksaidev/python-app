@@ -6,10 +6,24 @@ on:
 
 jobs:
   build:
-    runs-on: self-hosted
+    runs-on: [self-hosted, Linux, X64]  # match your runner's labels
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
+      - name: Set up Java (required by Gradle)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x gradlew
+
       - name: Run Python App via Gradle
-        run: gradle runApp
+        run: ./gradlew runApp
