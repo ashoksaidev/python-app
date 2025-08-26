@@ -1,11 +1,7 @@
-# Gradle
-.gradle/
-build/
-
 # Python
-.venv/
 __pycache__/
 *.pyc
+.venv/
 
 # OS/Editors
 .DS_Store
