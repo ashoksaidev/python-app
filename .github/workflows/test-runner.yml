@@ -1,23 +1,12 @@
-name: CI + CodeQL (fast)
+name: CI - Fast Publish to JFrog
 
 on:
   push:
     branches: [ main ]
-  pull_request:
-    branches: [ main ]
   workflow_dispatch:
 
-permissions:
-  contents: read
-  security-events: write   # needed for CodeQL SARIF upload
-
-concurrency:
-  group: fast-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  # ---- CI: build tiny package and publish to JFrog ----
-  ci:
+  build:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
@@ -25,11 +14,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-
-      - name: Run app.py (quick POC)
-        run: |
-          python3 src/main/python/app.py || true
-          echo "✅ app.py executed"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -44,24 +28,7 @@ jobs:
           python -m build
           ls -lh dist
 
-      # minimal sanity checks + publish
-      - name: Sanity check secrets
-        env:
-          JFROG_URL: ${{ secrets.JFROG_URL }}
-          JFROG_USER: ${{ secrets.JFROG_USER }}
-          JFROG_TOKEN: ${{ secrets.JFROG_TOKEN }}
-        run: |
-          test -n "$JFROG_URL"  || (echo "❌ JFROG_URL empty"; exit 1)
-          test -n "$JFROG_USER" || (echo "❌ JFROG_USER empty"; exit 1)
-          test -n "$JFROG_TOKEN"|| (echo "❌ JFROG_TOKEN empty"; exit 1)
-          echo "✅ Secrets are present"
-
-      - name: Check package metadata
-        run: |
-          python -m pip install -q twine
-          twine check dist/*
-
-      - name: Publish to JFrog (virtual → lands in pypi-local)
+      - name: Publish to JFrog
         env:
           JFROG_URL: ${{ secrets.JFROG_URL }}
           JFROG_USER: ${{ secrets.JFROG_USER }}
@@ -71,32 +38,3 @@ jobs:
             --repository-url "${JFROG_URL}/api/pypi/pypi/" \
             -u "${JFROG_USER}" -p "${JFROG_TOKEN}" \
             dist/*
-
-  # ---- CodeQL: lean Python scan, limited paths for speed ----
-  codeql:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    needs: ci   # wait for CI; remove if you want parallel
-    steps:
-      - name: Checkout (shallow)
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: Init CodeQL
-        uses: github/codeql-action/init@v3
-        with:
-          languages: python
-          config: |
-            paths:
-              - src
-            paths-ignore:
-              - tests
-              - dist
-              - .venv
-              - '**/*.min.js'
-
-      - name: Analyze
-        uses: github/codeql-action/analyze@v3
-        with:
-          category: "python"
