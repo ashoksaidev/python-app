@@ -1,4 +1,4 @@
-name: CI - Fast Publish to JFrog
+name: CI - Publish to JFrog
 
 on:
   push:
