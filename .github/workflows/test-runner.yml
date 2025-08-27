@@ -1,17 +1,27 @@
-name: CI - Python POC & Publish to JFrog
+name: CI + CodeQL (fast)
 
 on:
   push:
     branches: [ main ]
+  pull_request:
+    branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: read
+  security-events: write   # needed for CodeQL SARIF upload
+
+concurrency:
+  group: fast-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build:
+  # ---- CI: build tiny package and publish to JFrog ----
+  ci:
     runs-on: ubuntu-latest
     timeout-minutes: 3
-
     steps:
-      - name: Checkout
+      - name: Checkout (shallow)
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
@@ -34,7 +44,7 @@ jobs:
           python -m build
           ls -lh dist
 
-      # --- Diagnostics + Publish ---
+      # minimal sanity checks + publish
       - name: Sanity check secrets
         env:
           JFROG_URL: ${{ secrets.JFROG_URL }}
@@ -51,26 +61,42 @@ jobs:
           python -m pip install -q twine
           twine check dist/*
 
-      - name: Test auth to JFrog
+      - name: Publish to JFrog (virtual → lands in pypi-local)
         env:
           JFROG_URL: ${{ secrets.JFROG_URL }}
           JFROG_USER: ${{ secrets.JFROG_USER }}
           JFROG_TOKEN: ${{ secrets.JFROG_TOKEN }}
-          VIRTUAL_REPO: pypi
-        run: |
-          URL="${JFROG_URL}/api/pypi/${VIRTUAL_REPO}/simple/"
-          code=$(curl -s -o /dev/null -w "%{http_code}" -u "$JFROG_USER:$JFROG_TOKEN" "$URL")
-          echo "GET $URL → $code"
-          test "$code" = "200" || (echo "❌ Auth/URL failed (want 200, got $code)"; exit 1)
-
-      - name: Publish to JFrog
-        env:
-          JFROG_URL: ${{ secrets.JFROG_URL }}
-          JFROG_USER: ${{ secrets.JFROG_USER }}
-          JFROG_TOKEN: ${{ secrets.JFROG_TOKEN }}
-          VIRTUAL_REPO: pypi
         run: |
           twine upload \
-            --repository-url "${JFROG_URL}/api/pypi/${VIRTUAL_REPO}/" \
+            --repository-url "${JFROG_URL}/api/pypi/pypi/" \
             -u "${JFROG_USER}" -p "${JFROG_TOKEN}" \
             dist/*
+
+  # ---- CodeQL: lean Python scan, limited paths for speed ----
+  codeql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: ci   # wait for CI; remove if you want parallel
+    steps:
+      - name: Checkout (shallow)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Init CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: python
+          config: |
+            paths:
+              - src
+            paths-ignore:
+              - tests
+              - dist
+              - .venv
+              - '**/*.min.js'
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "python"
