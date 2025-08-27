@@ -1,4 +1,4 @@
-name: CI - Python POC & Publish
+name: CI - Python POC & Publish to JFrog
 
 on:
   push:
@@ -8,10 +8,10 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 3
 
     steps:
-      - name: Checkout (shallow)
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
@@ -30,15 +30,47 @@ jobs:
         run: python -m pip install -q --upgrade pip build twine
 
       - name: Build Python package
-        run: python -m build
+        run: |
+          python -m build
+          ls -lh dist
+
+      # --- Diagnostics + Publish ---
+      - name: Sanity check secrets
+        env:
+          JFROG_URL: ${{ secrets.JFROG_URL }}
+          JFROG_USER: ${{ secrets.JFROG_USER }}
+          JFROG_TOKEN: ${{ secrets.JFROG_TOKEN }}
+        run: |
+          test -n "$JFROG_URL"  || (echo "❌ JFROG_URL empty"; exit 1)
+          test -n "$JFROG_USER" || (echo "❌ JFROG_USER empty"; exit 1)
+          test -n "$JFROG_TOKEN"|| (echo "❌ JFROG_TOKEN empty"; exit 1)
+          echo "✅ Secrets are present"
+
+      - name: Check package metadata
+        run: |
+          python -m pip install -q twine
+          twine check dist/*
+
+      - name: Test auth to JFrog
+        env:
+          JFROG_URL: ${{ secrets.JFROG_URL }}
+          JFROG_USER: ${{ secrets.JFROG_USER }}
+          JFROG_TOKEN: ${{ secrets.JFROG_TOKEN }}
+          VIRTUAL_REPO: pypi
+        run: |
+          URL="${JFROG_URL}/api/pypi/${VIRTUAL_REPO}/simple/"
+          code=$(curl -s -o /dev/null -w "%{http_code}" -u "$JFROG_USER:$JFROG_TOKEN" "$URL")
+          echo "GET $URL → $code"
+          test "$code" = "200" || (echo "❌ Auth/URL failed (want 200, got $code)"; exit 1)
 
       - name: Publish to JFrog
         env:
           JFROG_URL: ${{ secrets.JFROG_URL }}
           JFROG_USER: ${{ secrets.JFROG_USER }}
           JFROG_TOKEN: ${{ secrets.JFROG_TOKEN }}
+          VIRTUAL_REPO: pypi
         run: |
           twine upload \
-            --repository-url "${JFROG_URL}/api/pypi/pypi/" \
+            --repository-url "${JFROG_URL}/api/pypi/${VIRTUAL_REPO}/" \
             -u "${JFROG_USER}" -p "${JFROG_TOKEN}" \
             dist/*
