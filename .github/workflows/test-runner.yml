@@ -1,93 +1,135 @@
-name: deploy docker via jfrog (vault oidc)
-
+name: build-and-deploy
 
 on:
+  push:
+    branches: ["main"]
   workflow_dispatch:
     inputs:
       image_tag:
-        description: "App image tag"
-        default: "1.0.0"
-        required: true
-      environment:
-        description: "Target environment"
-        default: "dev"
-        required: true
+        description: "Optional override image tag (default = commit SHA)"
+        required: false
+        default: ""
 
 permissions:
-  id-token: write
+  id-token: write   # required for OIDC → Vault
   contents: read
 
 concurrency:
-  group: deploy-${{ github.ref }}
+  group: pipeline-${{ github.ref }}
   cancel-in-progress: true
 
 env:
-  JFROG_SUBDOMAIN: trialbgccpz          # change if different
-  JFROG_DOCKER_REPO: docker             # virtual repo name
-  APP_IMAGE_NAME: hello-world           # image name in JFrog
+  APP_NAME: python-app                   # container name on the host
+  IMAGE_NAME: hello-world                # repository/image name in JFrog
+  HEALTH_URL: http://localhost:8080/health
 
 jobs:
-  build_sanity:
-    name: ci: quick sanity
-    runs-on: [self-hosted, Linux, X64]
-    timeout-minutes: 3
+  ci-build-push:
+    name: ci • build & push
+    runs-on: [self-hosted, Linux, X64]   # must be same VM that can reach VAULT_ADDR=127.0.0.1
+    outputs:
+      image_ref: ${{ steps.meta.outputs.image_ref }}
     steps:
       - name: checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-      - name: verify
-        run: |
-          set -euo pipefail
-          echo "sha=$GITHUB_SHA"
-          echo "ok"
 
-  deploy_docker:
-    name: cd: pull & run container
-    needs: build_sanity
-    runs-on: [self-hosted, Linux, X64]
-    timeout-minutes: 5
-    steps:
-      - name: checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: vault: read jfrog creds (oidc)
+      - name: vault • read jfrog creds (oidc)
         id: vault
         uses: hashicorp/vault-action@v3
         with:
-          url: ${{ secrets.VAULT_ADDR }}          # e.g. http://127.0.0.1:8200 or https://vault.example.com:8200
+          url: ${{ vars.VAULT_ADDR }}              # set repo/org Variable: http://127.0.0.1:8212
           method: jwt
-          role: gh-actions-poc
+          role: gh-actions
+          exportEnv: true
           secrets: |
-            kv/data/jfrog username | JFROG_USER ;
-            kv/data/jfrog token    | JFROG_TOKEN
+            ci/data/artifactory url          | ART_URL;
+            ci/data/artifactory repo_docker  | ART_DOCKER_REPO;
+            ci/data/artifactory username     | ART_USER;
+            ci/data/artifactory password     | ART_PASS;
 
-      - name: jfrog: docker login
+      - name: docker • login jfrog
+        run: |
+          echo "$ART_PASS" | docker login "$ART_URL" -u "$ART_USER" --password-stdin
+
+      - name: meta • compute tags
+        id: meta
         run: |
           set -euo pipefail
-          echo "${{ steps.vault.outputs.JFROG_TOKEN }}" | docker login \
-            "${{ env.JFROG_SUBDOMAIN }}.jfrog.io" \
-            -u "${{ steps.vault.outputs.JFROG_USER }}" \
-            --password-stdin
+          TAG_SHA="${{ github.sha }}"
+          TAG_BRANCH="${GITHUB_REF##*/}"        # e.g. main
+          if [ -n "${{ github.event.inputs.image_tag || '' }}" ]; then
+            TAG_OVERRIDE="${{ github.event.inputs.image_tag }}"
+          else
+            TAG_OVERRIDE="$TAG_SHA"
+          fi
 
-      - name: artifact: pull image
+          IMAGE_BASE="${ART_URL}/${ART_DOCKER_REPO}/${{ env.IMAGE_NAME }}"
+          IMAGE_SHA="${IMAGE_BASE}:${TAG_SHA}"
+          IMAGE_BRANCH="${IMAGE_BASE}:${TAG_BRANCH}"
+          IMAGE_OVERRIDE="${IMAGE_BASE}:${TAG_OVERRIDE}"
+
+          echo "IMAGE_BASE=$IMAGE_BASE"       >> $GITHUB_ENV
+          echo "IMAGE_SHA=$IMAGE_SHA"         >> $GITHUB_ENV
+          echo "IMAGE_BRANCH=$IMAGE_BRANCH"   >> $GITHUB_ENV
+          echo "IMAGE_OVERRIDE=$IMAGE_OVERRIDE" >> $GITHUB_ENV
+          echo "image_ref=$IMAGE_OVERRIDE"    >> $GITHUB_OUTPUT
+
+      - name: docker • build (chainguard base in your Dockerfile)
+        run: |
+          docker build -t "$IMAGE_SHA" .
+          docker tag "$IMAGE_SHA" "$IMAGE_BRANCH"
+          docker tag "$IMAGE_SHA" "$IMAGE_OVERRIDE"
+
+      - name: docker • push
+        run: |
+          docker push "$IMAGE_SHA"
+          docker push "$IMAGE_BRANCH"
+          if [ "$IMAGE_OVERRIDE" != "$IMAGE_SHA" ] && [ "$IMAGE_OVERRIDE" != "$IMAGE_BRANCH" ]; then
+            docker push "$IMAGE_OVERRIDE"
+          fi
+
+      - name: smoke • optional quick scan & size
+        run: |
+          docker image inspect "$IMAGE_SHA" --format='{{.Size}} bytes' || true
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b . v0.77.0
+          ./grype "$IMAGE_SHA" --fail-on=critical || true
+
+  cd-deploy:
+    name: cd • deploy container
+    runs-on: [self-hosted, Linux, X64]
+    needs: ci-build-push
+    steps:
+      - name: vault • read jfrog creds (oidc)
+        id: vault
+        uses: hashicorp/vault-action@v3
+        with:
+          url: ${{ vars.VAULT_ADDR }}
+          method: jwt
+          role: gh-actions
+          exportEnv: true
+          secrets: |
+            ci/data/artifactory url          | ART_URL;
+            ci/data/artifactory repo_docker  | ART_DOCKER_REPO;
+            ci/data/artifactory username     | ART_USER;
+            ci/data/artifactory password     | ART_PASS;
+
+      - name: docker • login jfrog
+        run: |
+          echo "$ART_PASS" | docker login "$ART_URL" -u "$ART_USER" --password-stdin
+
+      - name: deploy • pull & run
+        env:
+          IMAGE: ${{ needs.ci-build-push.outputs.image_ref }}
         run: |
           set -euo pipefail
-          IMAGE="${{ env.JFROG_SUBDOMAIN }}.jfrog.io/${{ env.JFROG_DOCKER_REPO }}/${{ env.APP_IMAGE_NAME }}:${{ inputs.image_tag }}"
-          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
           docker pull "$IMAGE"
+          docker rm -f ${{ env.APP_NAME }} || true
+          # map 8080 in container → 8080 on host; adjust if your app uses a different port
+          docker run -d --name ${{ env.APP_NAME }} -p 8080:8080 "$IMAGE"
 
-      - name: deploy: run container
+      - name: post-deploy • health check
         run: |
           set -euo pipefail
-          docker rm -f python-app || true
-          docker run -d --name python-app \
-            -e APP_ENV="${{ inputs.environment }}" \
-            "$IMAGE"
-
-      - name: post-deploy: status
-        run: |
-          set -euo pipefail
+          sleep 3
+          curl -fsS "${{ env.HEALTH_URL }}"
           docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"
