@@ -2,16 +2,23 @@
 FROM cgr.dev/chainguard/python:latest-dev AS builder
 WORKDIR /app
 
-COPY requirements.txt . 
-RUN pip install --no-cache-dir -r requirements.txt || true
+# Install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
+# Copy source code
 COPY . .
 
 # Stage 2: Runtime with minimal Chainguard image
 FROM cgr.dev/chainguard/python:latest
 WORKDIR /app
 
+# Copy built app from builder stage
 COPY --from=builder /app /app
 
+# Expose FastAPI port
+EXPOSE 8080
+
+# Run the FastAPI app with Uvicorn
 CMD ["python", "main/python/app.py"]
 
