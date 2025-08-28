@@ -1,90 +1,93 @@
-name: Minimal CI + CD (Vault → JFrog → Docker)
+name: deploy docker via jfrog (vault oidc)
+
 
 on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: "Docker image tag in JFrog (e.g. 1.0.0)"
+        description: "App image tag"
         default: "1.0.0"
         required: true
-      env_name:
-        description: "Environment label (dev/staging)"
+      environment:
+        description: "Target environment"
         default: "dev"
         required: true
 
 permissions:
-  id-token: write    # required for Vault OIDC
+  id-token: write
   contents: read
 
 concurrency:
-  group: cd-${{ github.ref }}
+  group: deploy-${{ github.ref }}
   cancel-in-progress: true
 
 env:
-  JFROG_SUBDOMAIN: trialbgccpz   # <-- change if your subdomain differs
-  REPO: docker                   # JFrog Docker virtual repo name
+  JFROG_SUBDOMAIN: trialbgccpz          # change if different
+  JFROG_DOCKER_REPO: docker             # virtual repo name
+  APP_IMAGE_NAME: hello-world           # image name in JFrog
 
 jobs:
-  ci:
-    name: CI (quick sanity)
+  build_sanity:
+    name: ci: quick sanity
     runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 3
     steps:
-      - name: Checkout (shallow)
+      - name: checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-
-      # keep CI ultra-fast for POC
-      - name: Quick check
+      - name: verify
         run: |
-          echo "✅ CI sanity done for $GITHUB_SHA"
+          set -euo pipefail
+          echo "sha=$GITHUB_SHA"
+          echo "ok"
 
-  cd:
-    name: CD (Vault → JFrog → Docker run)
-    needs: ci
+  deploy_docker:
+    name: cd: pull & run container
+    needs: build_sanity
     runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 5
     steps:
-      - name: Checkout (shallow)
+      - name: checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      # (b) Get Artifactory creds from Vault via OIDC (no static secrets)
-      - name: Read JFrog creds from Vault
+      - name: vault: read jfrog creds (oidc)
         id: vault
         uses: hashicorp/vault-action@v3
         with:
-          url: ${{ secrets.VAULT_ADDR }}   # e.g. http://127.0.0.1:8200 or https://<vault-host>:8200
+          url: ${{ secrets.VAULT_ADDR }}          # e.g. http://127.0.0.1:8200 or https://vault.example.com:8200
           method: jwt
-          role: gh-actions-poc             # role you created in Vault
+          role: gh-actions-poc
           secrets: |
             kv/data/jfrog username | JFROG_USER ;
             kv/data/jfrog token    | JFROG_TOKEN
 
-      # (c) Auth to JFrog Docker registry
-      - name: Docker login (JFrog)
+      - name: jfrog: docker login
         run: |
-          echo "${{ steps.vault.outputs.JFROG_TOKEN }}" \
-          | docker login ${{ env.JFROG_SUBDOMAIN }}.jfrog.io \
-              -u "${{ steps.vault.outputs.JFROG_USER }}" --password-stdin
+          set -euo pipefail
+          echo "${{ steps.vault.outputs.JFROG_TOKEN }}" | docker login \
+            "${{ env.JFROG_SUBDOMAIN }}.jfrog.io" \
+            -u "${{ steps.vault.outputs.JFROG_USER }}" \
+            --password-stdin
 
-      # (d) Pull the artifact (Docker image) from JFrog
-      - name: Pull image
+      - name: artifact: pull image
         run: |
-          IMAGE="${{ env.JFROG_SUBDOMAIN }}.jfrog.io/${{ env.REPO }}/hello-world:${{ inputs.image_tag }}"
-          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+          set -euo pipefail
+          IMAGE="${{ env.JFROG_SUBDOMAIN }}.jfrog.io/${{ env.JFROG_DOCKER_REPO }}/${{ env.APP_IMAGE_NAME }}:${{ inputs.image_tag }}"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
           docker pull "$IMAGE"
 
-      # (e) Deploy on this VM (stop old, run new)
-      - name: Run container
+      - name: deploy: run container
         run: |
+          set -euo pipefail
           docker rm -f python-app || true
           docker run -d --name python-app \
-            -e APP_ENV="${{ inputs.env_name }}" \
+            -e APP_ENV="${{ inputs.environment }}" \
             "$IMAGE"
 
-      # tiny verification (fast)
-      - name: Show container status
-        run: docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"
+      - name: post-deploy: status
+        run: |
+          set -euo pipefail
+          docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"
