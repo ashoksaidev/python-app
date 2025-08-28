@@ -28,6 +28,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: debug • inspect OIDC token
+        run: |
+          echo "${ACTIONS_ID_TOKEN}" | cut -d '.' -f2 | base64 -d | jq || echo "OIDC token inspection failed"
+
       - name: vault • read jfrog creds (oidc)
         uses: hashicorp/vault-action@v3
         with:
@@ -93,44 +97,3 @@ jobs:
           secrets: |
             ci/data/artifactory url          | ART_URL;
             ci/data/artifactory repo_docker  | ART_DOCKER_REPO;
-            ci/data/artifactory username     | ART_USER;
-            ci/data/artifactory password     | ART_PASS;
-
-      - name: docker • login jfrog
-        run: echo "$ART_PASS" | docker login "$ART_URL" -u "$ART_USER" --password-stdin
-
-      - name: deploy • pull & run locally
-        env:
-          IMAGE: ${{ needs.ci.outputs.image_ref }}
-        run: |
-          docker pull "$IMAGE"
-          docker rm -f ${{ env.APP_NAME }} || true
-          docker run -d --name ${{ env.APP_NAME }} -p 8080:8080 "$IMAGE"
-
-      - name: verify • image pulled from jfrog
-        run: docker inspect "$IMAGE" | grep RepoTags || echo "Image not found locally"
-
-      - name: post-deploy • health
-        run: |
-          sleep 3
-          curl -fsS "${{ env.HEALTH_URL }}"
-          docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"
-
-      - name: deploy • to Kubernetes
-        env:
-          IMAGE: ${{ needs.ci.outputs.image_ref }}
-        run: |
-          kubectl set image deployment/python-app python-app=$IMAGE
-          kubectl rollout status deployment/python-app
-
-      - name: deploy • to staging VM
-        env:
-          IMAGE: ${{ needs.ci.outputs.image_ref }}
-        run: |
-          ssh user@staging-vm "docker pull $IMAGE && docker run -d -p 8080:8080 $IMAGE"
-
-      - name: deploy • to Azure Web App
-        uses: azure/webapps-deploy@v2
-        with:
-          app-name: python-app-staging
-          images: ${{ needs.ci.outputs.image_ref }}
