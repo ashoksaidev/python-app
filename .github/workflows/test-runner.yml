@@ -9,9 +9,7 @@ permissions:
   id-token: write
   contents: read
 
-# Use self-hosted runner on the same VM as Vault
 env:
-  # For dev: hardcode; later switch to repo variable or secret
   VAULT_ADDR: http://127.0.0.1:8212
   APP_NAME: python-app
   IMAGE_NAME: hello-world
@@ -39,9 +37,9 @@ jobs:
         id: vault
         uses: hashicorp/vault-action@v3
         with:
-          url: ${{ env.VAULT_ADDR }}     # <- fixed: always supplied
+          url: ${{ env.VAULT_ADDR }}
           method: jwt
-          role: gh-actions               # must match the role you created
+          role: gh-actions
           exportEnv: true
           secrets: |
             ci/data/artifactory url          | ART_URL;
@@ -70,6 +68,11 @@ jobs:
         run: |
           docker build -t "$IMAGE_SHA" .
           docker tag "$IMAGE_SHA" "$IMAGE_BRANCH"
+
+      - name: inspect • image size & security
+        run: |
+          docker images "$IMAGE_SHA"
+          docker scan "$IMAGE_SHA" || echo "Scan tool not available"
 
       - name: docker • push
         run: |
