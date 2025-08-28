@@ -1,4 +1,4 @@
-name: Minimal CI/CD Test
+name: python CI/CD Test
 
 on:
   workflow_dispatch:   # manual trigger
