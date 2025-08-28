@@ -1,51 +1,90 @@
-name: python CI/CD Test
+name: Minimal CI + CD (Vault → JFrog → Docker)
 
 on:
-  workflow_dispatch:   # manual trigger
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Docker image tag in JFrog (e.g. 1.0.0)"
+        default: "1.0.0"
+        required: true
+      env_name:
+        description: "Environment label (dev/staging)"
+        default: "dev"
+        required: true
 
 permissions:
-  id-token: write      # needed for Vault OIDC
+  id-token: write    # required for Vault OIDC
   contents: read
 
-jobs:
-  test:
-    runs-on: [self-hosted, Linux, X64]
+concurrency:
+  group: cd-${{ github.ref }}
+  cancel-in-progress: true
 
+env:
+  JFROG_SUBDOMAIN: trialbgccpz   # <-- change if your subdomain differs
+  REPO: docker                   # JFrog Docker virtual repo name
+
+jobs:
+  ci:
+    name: CI (quick sanity)
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 3
     steps:
-      - name: Checkout
+      - name: Checkout (shallow)
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: Read JFrog creds from Vault (OIDC)
+      # keep CI ultra-fast for POC
+      - name: Quick check
+        run: |
+          echo "✅ CI sanity done for $GITHUB_SHA"
+
+  cd:
+    name: CD (Vault → JFrog → Docker run)
+    needs: ci
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 5
+    steps:
+      - name: Checkout (shallow)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # (b) Get Artifactory creds from Vault via OIDC (no static secrets)
+      - name: Read JFrog creds from Vault
         id: vault
         uses: hashicorp/vault-action@v3
         with:
-          url: ${{ secrets.VAULT_ADDR }}
+          url: ${{ secrets.VAULT_ADDR }}   # e.g. http://127.0.0.1:8200 or https://<vault-host>:8200
           method: jwt
-          role: gh-actions-poc
+          role: gh-actions-poc             # role you created in Vault
           secrets: |
             kv/data/jfrog username | JFROG_USER ;
             kv/data/jfrog token    | JFROG_TOKEN
 
-      - name: Quick sanity (mask & ping Artifactory)
-        env:
-          JFROG_USER:  ${{ steps.vault.outputs.JFROG_USER }}
-          JFROG_TOKEN: ${{ steps.vault.outputs.JFROG_TOKEN }}
-          JFROG_SUB:   trialbgccpz                          # <-- change if your subdomain differs
+      # (c) Auth to JFrog Docker registry
+      - name: Docker login (JFrog)
         run: |
-          echo "JFROG_USER=${JFROG_USER}"
-          echo "JFROG_TOKEN=$(echo "$JFROG_TOKEN" | sed 's/./*/g')"   # mask
-          curl -sf -u "${JFROG_USER}:${JFROG_TOKEN}" "https://${JFROG_SUB}.jfrog.io/artifactory/api/system/ping" | tee /dev/stderr
+          echo "${{ steps.vault.outputs.JFROG_TOKEN }}" \
+          | docker login ${{ env.JFROG_SUBDOMAIN }}.jfrog.io \
+              -u "${{ steps.vault.outputs.JFROG_USER }}" --password-stdin
 
-      # --- OPTIONAL: Uncomment if you want to prove Docker auth too ---
-      # - name: Docker login to JFrog
-      #   env:
-      #     JFROG_USER:  ${{ steps.vault.outputs.JFROG_USER }}
-      #     JFROG_TOKEN: ${{ steps.vault.outputs.JFROG_TOKEN }}
-      #     JFROG_SUB:   trialbgccpz
-      #   run: |
-      #     echo "$JFROG_TOKEN" | docker login "${JFROG_SUB}.jfrog.io" -u "$JFROG_USER" --password-stdin
-      #     docker pull hello-world:latest
-      #     docker tag hello-world:latest "${JFROG_SUB}.jfrog.io/docker/hello-world:ci-test"
-      #     docker push "${JFROG_SUB}.jfrog.io/docker/hello-world:ci-test"
+      # (d) Pull the artifact (Docker image) from JFrog
+      - name: Pull image
+        run: |
+          IMAGE="${{ env.JFROG_SUBDOMAIN }}.jfrog.io/${{ env.REPO }}/hello-world:${{ inputs.image_tag }}"
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+          docker pull "$IMAGE"
+
+      # (e) Deploy on this VM (stop old, run new)
+      - name: Run container
+        run: |
+          docker rm -f python-app || true
+          docker run -d --name python-app \
+            -e APP_ENV="${{ inputs.env_name }}" \
+            "$IMAGE"
+
+      # tiny verification (fast)
+      - name: Show container status
+        run: docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"
