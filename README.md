@@ -1,7 +1,14 @@
-# Fast 1-min CI (POC)
 
-Minimal repo to prove a super-fast CI on a self-hosted runner.
+## ⚙️ CI/CD Trigger
 
-**Trigger:** push to `main` (files under `src/**` or the workflow), or run manually via “Run workflow”.
+This pipeline runs automatically on:
 
-**Expected output:**
+- Pushes to the `main` branch affecting:
+  - Files under `src/**`
+  - The workflow file itself
+- Manual trigger via **"Run workflow"** in GitHub Actions
+
+## 🧪 Expected Output
+
+```bash
+Hello from a super-fast POC pipeline!
