@@ -28,24 +28,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: get OIDC token with audience
+        id: oidc
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const token = await github.actions.getIDToken({ audience: "https://github.com" });
+            return token;
+
+      - name: debug • inspect OIDC token
+        run: |
+          echo "${{ steps.oidc.outputs.result }}" | cut -d '.' -f2 | base64 -d | jq || echo "OIDC token inspection failed"
+
       - name: vault • read jfrog creds (oidc)
-        id: vault
         uses: hashicorp/vault-action@v3
         with:
           url: ${{ env.VAULT_ADDR }}
           method: jwt
           role: gh-actions
           path: jwt
+          jwtToken: ${{ steps.oidc.outputs.result }}
           exportEnv: true
           secrets: |
             ci/data/artifactory url          | ART_URL;
             ci/data/artifactory repo_docker  | ART_DOCKER_REPO;
             ci/data/artifactory username     | ART_USER;
             ci/data/artifactory password     | ART_PASS;
-
-      - name: debug • inspect OIDC token
-        run: |
-          echo "${ACTIONS_ID_TOKEN}" | cut -d '.' -f2 | base64 -d | jq || echo "OIDC token inspection failed"
 
       - name: docker • login jfrog
         run: echo "$ART_PASS" | docker login "$ART_URL" -u "$ART_USER" --password-stdin
@@ -88,13 +96,13 @@ jobs:
     needs: ci
     steps:
       - name: vault • read jfrog creds (oidc)
-        id: vault
         uses: hashicorp/vault-action@v3
         with:
           url: ${{ env.VAULT_ADDR }}
           method: jwt
           role: gh-actions
           path: jwt
+          jwtToken: ${{ needs.ci.steps.oidc.outputs.result }}
           exportEnv: true
           secrets: |
             ci/data/artifactory url          | ART_URL;
