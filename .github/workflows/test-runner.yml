@@ -1,40 +1,51 @@
-name: CI - Publish to JFrog
+name: Minimal CI/CD Test
 
 on:
-  push:
-    branches: [ main ]
-  workflow_dispatch:
+  workflow_dispatch:   # manual trigger
+
+permissions:
+  id-token: write      # needed for Vault OIDC
+  contents: read
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 3
+  test:
+    runs-on: [self-hosted, Linux, X64]
+
     steps:
-      - name: Checkout (shallow)
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Read JFrog creds from Vault (OIDC)
+        id: vault
+        uses: hashicorp/vault-action@v3
         with:
-          python-version: "3.11"
+          url: ${{ secrets.VAULT_ADDR }}
+          method: jwt
+          role: gh-actions-poc
+          secrets: |
+            kv/data/jfrog username | JFROG_USER ;
+            kv/data/jfrog token    | JFROG_TOKEN
 
-      - name: Install packaging tools
-        run: python -m pip install -q --upgrade pip build twine
-
-      - name: Build Python package
-        run: |
-          python -m build
-          ls -lh dist
-
-      - name: Publish to JFrog
+      - name: Quick sanity (mask & ping Artifactory)
         env:
-          JFROG_URL: ${{ secrets.JFROG_URL }}
-          JFROG_USER: ${{ secrets.JFROG_USER }}
-          JFROG_TOKEN: ${{ secrets.JFROG_TOKEN }}
+          JFROG_USER:  ${{ steps.vault.outputs.JFROG_USER }}
+          JFROG_TOKEN: ${{ steps.vault.outputs.JFROG_TOKEN }}
+          JFROG_SUB:   trialbgccpz                          # <-- change if your subdomain differs
         run: |
-          twine upload \
-            --repository-url "${JFROG_URL}/api/pypi/pypi/" \
-            -u "${JFROG_USER}" -p "${JFROG_TOKEN}" \
-            dist/*
+          echo "JFROG_USER=${JFROG_USER}"
+          echo "JFROG_TOKEN=$(echo "$JFROG_TOKEN" | sed 's/./*/g')"   # mask
+          curl -sf -u "${JFROG_USER}:${JFROG_TOKEN}" "https://${JFROG_SUB}.jfrog.io/artifactory/api/system/ping" | tee /dev/stderr
+
+      # --- OPTIONAL: Uncomment if you want to prove Docker auth too ---
+      # - name: Docker login to JFrog
+      #   env:
+      #     JFROG_USER:  ${{ steps.vault.outputs.JFROG_USER }}
+      #     JFROG_TOKEN: ${{ steps.vault.outputs.JFROG_TOKEN }}
+      #     JFROG_SUB:   trialbgccpz
+      #   run: |
+      #     echo "$JFROG_TOKEN" | docker login "${JFROG_SUB}.jfrog.io" -u "$JFROG_USER" --password-stdin
+      #     docker pull hello-world:latest
+      #     docker tag hello-world:latest "${JFROG_SUB}.jfrog.io/docker/hello-world:ci-test"
+      #     docker push "${JFROG_SUB}.jfrog.io/docker/hello-world:ci-test"
