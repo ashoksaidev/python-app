@@ -97,3 +97,25 @@ jobs:
           secrets: |
             ci/data/artifactory url          | ART_URL;
             ci/data/artifactory repo_docker  | ART_DOCKER_REPO;
+            ci/data/artifactory username     | ART_USER;
+            ci/data/artifactory password     | ART_PASS;
+
+      - name: docker • login jfrog
+        run: echo "$ART_PASS" | docker login "$ART_URL" -u "$ART_USER" --password-stdin
+
+      - name: deploy • pull & run
+        env:
+          IMAGE: ${{ needs.ci.outputs.image_ref }}
+        run: |
+          docker pull "$IMAGE"
+          docker rm -f ${{ env.APP_NAME }} || true
+          docker run -d --name ${{ env.APP_NAME }} -p 8080:8080 "$IMAGE"
+
+      - name: verify • image pulled from jfrog
+        run: docker inspect "$IMAGE" | grep RepoTags || echo "Image not found locally"
+
+      - name: post-deploy • health
+        run: |
+          sleep 3
+          curl -fsS "${{ env.HEALTH_URL }}"
+          docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"
