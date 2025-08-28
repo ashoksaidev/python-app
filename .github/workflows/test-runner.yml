@@ -28,18 +28,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: get OIDC token with audience
-        id: oidc
-        uses: actions/github-script@v6
-        with:
-          script: |
-            const token = await github.actions.getIDToken({ audience: "https://github.com" });
-            return token;
-
-      - name: debug • inspect OIDC token
-        run: |
-          echo "${{ steps.oidc.outputs.result }}" | cut -d '.' -f2 | base64 -d | jq || echo "OIDC token inspection failed"
-
       - name: vault • read jfrog creds (oidc)
         uses: hashicorp/vault-action@v3
         with:
@@ -47,7 +35,6 @@ jobs:
           method: jwt
           role: gh-actions
           path: jwt
-          jwtToken: ${{ steps.oidc.outputs.result }}
           exportEnv: true
           secrets: |
             ci/data/artifactory url          | ART_URL;
@@ -102,7 +89,6 @@ jobs:
           method: jwt
           role: gh-actions
           path: jwt
-          jwtToken: ${{ needs.ci.steps.oidc.outputs.result }}
           exportEnv: true
           secrets: |
             ci/data/artifactory url          | ART_URL;
