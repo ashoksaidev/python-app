@@ -99,7 +99,7 @@ jobs:
       - name: docker • login jfrog
         run: echo "$ART_PASS" | docker login "$ART_URL" -u "$ART_USER" --password-stdin
 
-      - name: deploy • pull & run
+      - name: deploy • pull & run locally
         env:
           IMAGE: ${{ needs.ci.outputs.image_ref }}
         run: |
@@ -115,3 +115,22 @@ jobs:
           sleep 3
           curl -fsS "${{ env.HEALTH_URL }}"
           docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"
+
+      - name: deploy • to Kubernetes
+        env:
+          IMAGE: ${{ needs.ci.outputs.image_ref }}
+        run: |
+          kubectl set image deployment/python-app python-app=$IMAGE
+          kubectl rollout status deployment/python-app
+
+      - name: deploy • to staging VM
+        env:
+          IMAGE: ${{ needs.ci.outputs.image_ref }}
+        run: |
+          ssh user@staging-vm "docker pull $IMAGE && docker run -d -p 8080:8080 $IMAGE"
+
+      - name: deploy • to Azure Web App
+        uses: azure/webapps-deploy@v2
+        with:
+          app-name: python-app-staging
+          images: ${{ needs.ci.outputs.image_ref }}
