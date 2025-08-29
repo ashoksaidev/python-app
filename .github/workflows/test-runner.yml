@@ -6,11 +6,14 @@ on:
   workflow_dispatch:
 
 permissions:
-  id-token: write
+  id-token: write     # REQUIRED for OIDC
   contents: read
 
 env:
+  # If Vault is local to your self-hosted runner, keep this:
   VAULT_ADDR: http://127.0.0.1:8212
+  # Or, if Vault is public, prefer: VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
+  VAULT_NAMESPACE: ${{ secrets.VAULT_NAMESPACE }}
   APP_NAME: python-app
   IMAGE_NAME: hello-world
   HEALTH_URL: http://localhost:8080/health
@@ -20,27 +23,123 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  ci:
-    name: ci • build & push
+  # --- 1) OIDC smoke test: request a GitHub OIDC token and print its 'aud' ---
+  oidc-smoke:
+    name: ci • OIDC availability
+    runs-on: [self-hosted, Linux, X64]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Inspect OIDC token (debug)
+        env:
+          REPO_OWNER: ${{ github.repository_owner }}
+        run: |
+          set -e
+          command -v jq >/dev/null || (sudo apt-get update -y && sudo apt-get install -y jq)
+          # Request a token with the audience your Vault role expects
+          TOKEN_URL="${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://github.com/${REPO_OWNER}"
+          IDTOKEN="$(curl -s -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "$TOKEN_URL" | jq -r .value)"
+          PAYLOAD="$(printf '%s' "$IDTOKEN" | cut -d '.' -f2 | base64 -d 2>/dev/null || true)"
+          echo "aud from OIDC token:"
+          echo "$PAYLOAD" | jq -r '.aud'
+          # Also verify issuer claim (Vault binds on this)
+          echo "iss from OIDC token:"
+          echo "$PAYLOAD" | jq -r '.iss'
+
+  # --- 2) Pull secrets from Vault using OIDC (must run on same runner/network as Vault if localhost) ---
+  get-secrets:
+    name: ci • Get Vault secrets (OIDC)
+    needs: oidc-smoke
     runs-on: [self-hosted, Linux, X64]
     outputs:
-      image_ref: ${{ steps.meta.outputs.image_ref }}
+      art_url: ${{ steps.export.outputs.ART_URL }}
+      art_repo: ${{ steps.export.outputs.ART_DOCKER_REPO }}
+      art_user: ${{ steps.export.outputs.ART_USER }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: debug • inspect OIDC token
-        run: |
-          echo "${ACTIONS_ID_TOKEN}" | cut -d '.' -f2 | base64 -d | jq || echo "OIDC token inspection failed"
-
-      - name: vault • read jfrog creds (oidc)
+      - name: vault • read JFrog creds (OIDC)
+        id: vault
         uses: hashicorp/vault-action@v3
         with:
           url: ${{ env.VAULT_ADDR }}
           method: jwt
-          role: gh-actions
+          # Auth mount for JWT; change only if you mounted it somewhere else
           path: jwt
+          # Your Vault JWT role name; ensure this role exists and is configured to match audience & claims
+          role: gh-actions
+          # IMPORTANT: must match your Vault role's bound_audiences
+          jwtGithubAudience: https://github.com/${{ github.repository_owner }}
+          # Optional if you use HCP Vault namespaces
+          namespace: ${{ env.VAULT_NAMESPACE }}
+          # Export resolved secret values to env (APP_TOKEN/DB_USER/DB_PASS etc.)
           exportEnv: true
+          # Also export the short-lived Vault token if you want to revoke later
+          exportToken: true
+          # Map Vault secrets -> env vars (adjust to your KV paths/fields)
           secrets: |
             ci/data/artifactory url          | ART_URL;
             ci/data/artifactory repo_docker  | ART_DOCKER_REPO;
-            ci/data/artifactory username     | ART_USER;
+            ci/data/artifactory username     | ART_USER
+            # Add more if needed:
+            # secret/data/app token           | APP_TOKEN
+            # secret/data/app db_username     | DB_USER
+            # secret/data/app db_password     | DB_PASS
+
+      - name: Export selected outputs
+        id: export
+        run: |
+          echo "ART_URL=${ART_URL}" >> $GITHUB_OUTPUT
+          echo "ART_DOCKER_REPO=${ART_DOCKER_REPO}" >> $GITHUB_OUTPUT
+          echo "ART_USER=${ART_USER}" >> $GITHUB_OUTPUT
+
+      - name: Verify secrets are available
+        run: |
+          test -n "$ART_URL" || (echo "ART_URL missing" && exit 1)
+          test -n "$ART_DOCKER_REPO" || (echo "ART_DOCKER_REPO missing" && exit 1)
+          test -n "$ART_USER" || (echo "ART_USER missing" && exit 1)
+          echo "JFrog URL: $ART_URL"
+          echo "Docker repo: $ART_DOCKER_REPO"
+          echo "User present: yes"
+
+      - name: Revoke Vault token (optional)
+        if: env.VAULT_TOKEN != ''
+        env:
+          VAULT_TOKEN: ${{ env.VAULT_TOKEN }}
+        run: |
+          curl -s -X POST -H "X-Vault-Token: $VAULT_TOKEN" "${VAULT_ADDR}/v1/auth/token/revoke-self" || true
+
+  # --- 3) Your CI build & push using secrets from Vault ---
+  ci:
+    name: ci • build & push
+    needs: get-secrets
+    runs-on: [self-hosted, Linux, X64]
+    env:
+      ART_URL: ${{ needs.get-secrets.outputs.art_url }}
+      ART_DOCKER_REPO: ${{ needs.get-secrets.outputs.art_repo }}
+      ART_USER: ${{ needs.get-secrets.outputs.art_user }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Optional: login to your JFrog Docker registry using a password/token you also pull from Vault
+      # - name: Docker login to JFrog
+      #   run: |
+      #     echo "$ART_PASSWORD" | docker login "$ART_URL" -u "$ART_USER" --password-stdin
+
+      - name: Build image
+        run: |
+          docker build -t "$IMAGE_NAME:ci" .
+
+      - name: Tag & push image
+        run: |
+          # Example target ref; change to your actual registry/project
+          IMAGE_REF="${ART_URL}/${ART_DOCKER_REPO}/${IMAGE_NAME}:$(git rev-parse --short HEAD)"
+          docker tag "$IMAGE_NAME:ci" "$IMAGE_REF"
+          echo "image_ref=$IMAGE_REF" >> $GITHUB_OUTPUT
+          docker push "$IMAGE_REF"
+
+      - name: Health check (optional)
+        run: |
+          curl -fsS "$HEALTH_URL" || (echo "Health check failed" && exit 1)
