@@ -20,4 +20,4 @@ COPY --from=builder /app /app
 EXPOSE 8080
 
 # Run FastAPI app using Uvicorn
-CMD ["uvicorn", "main.python.app:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["uvicorn", "src.app:app", "--host", "0.0.0.0", "--port", "8080"]
