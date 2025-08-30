@@ -1,32 +1,27 @@
 version: 2
 updates:
-  # Python (pip)
   - package-ecosystem: "pip"
-    directory: "/"                      # where requirements.txt / pyproject.toml lives
+    directory: "/"  # Python dependencies (requirements.txt, pyproject.toml)
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
 
-  # JavaScript (npm or yarn)
   - package-ecosystem: "npm"
-    directory: "/"
+    directory: "/"  # Frontend dependencies (package.json)
     schedule:
       interval: "weekly"
 
-  # GitHub Actions (keeps your actions up to date)
   - package-ecosystem: "github-actions"
-    directory: "/"
+    directory: "/"  # CI/CD workflow updates
     schedule:
       interval: "weekly"
 
-  # Gradle (if you use it)
   - package-ecosystem: "gradle"
-    directory: "/"
+    directory: "/"  # Java build system (if used)
     schedule:
       interval: "weekly"
 
-  # Docker (if applicable)
   - package-ecosystem: "docker"
-    directory: "/"
+    directory: "/"  # Dockerfile base image updates
     schedule:
       interval: "weekly"
