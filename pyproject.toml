@@ -8,6 +8,10 @@ version = "0.1.0"
 description = "Internal tool for CI/CD artifact publishing"
 requires-python = ">=3.8"
 
+[project.dependencies]
+fastapi = "==0.110.0"
+uvicorn = {version = "==0.29.0", extras = ["standard"]}
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 
