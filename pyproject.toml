@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "artifact_deployer"
+name = "deploy_utils"
 version = "0.1.0"
-description = "POC for CI/CD artifact deployment"
+description = "Internal tool for CI/CD artifact publishing"
 requires-python = ">=3.8"
 
 [tool.setuptools]
