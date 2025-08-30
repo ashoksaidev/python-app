@@ -41,46 +41,7 @@ jobs:
         run: |
           pytest || echo "No tests found"
 
-      - name: Authenticate with Vault (OIDC)
-        id: vault
-        uses: hashicorp/vault-action@v3
-        with:
-          url: http://127.0.0.1:8212
-          method: jwt
-          path: jwt
-          role: gh-actions
-          jwtGithubAudience: https://github.com/${{ github.repository_owner }}
-          namespace: ${{ env.VAULT_NAMESPACE }}
-          exportEnv: true
-          secrets: |
-            ci/data/artifactory url          | ART_URL;
-            ci/data/artifactory repo_docker  | ART_DOCKER_REPO;
-            ci/data/artifactory username     | ART_USER;
-            ci/data/artifactory password     | ART_PASSWORD
-
-      - name: Docker login to JFrog
-        run: echo "$ART_PASSWORD" | docker login "$ART_URL" -u "$ART_USER" --password-stdin
-
-      - name: Build Docker image
-        run: docker build -t "$IMAGE_NAME:ci" .
-
-      - name: Scan image for vulnerabilities
+      - name: Inspect GitHub OIDC token
         run: |
-          curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh
-          trivy image "$IMAGE_NAME:ci"
-
-      - name: Tag & push image to JFrog
-        run: |
-          IMAGE_REF="${ART_URL}/${ART_DOCKER_REPO}/${IMAGE_NAME}:$(git rev-parse --short HEAD)"
-          docker tag "$IMAGE_NAME:ci" "$IMAGE_REF"
-          docker push "$IMAGE_REF"
-
-      - name: Deploy to Azure Web App
-        uses: azure/webapps-deploy@v2
-        with:
-          app-name: ${{ secrets.AZURE_WEBAPP_NAME }}
-          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
-          package: .
-
-      - name: Post-deployment health check
-        run: curl -f $HEALTH_URL || exit 1
+          TOKEN_URL="${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://github.com/${{ github.repository_owner }}"
+          IDTOKEN="$(curl -s -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "$TOKEN
