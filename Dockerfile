@@ -10,7 +10,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application source code
-COPY . .
+COPY src/ ./src/
 
 # ------------------------------------------------------------
 # Stage 2: Runtime environment using minimal Chainguard image
@@ -25,4 +25,4 @@ COPY --from=build-env /opt/app /opt/app
 EXPOSE 8080
 
 # Launch FastAPI app using Uvicorn
-CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
