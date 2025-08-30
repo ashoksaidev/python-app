@@ -16,12 +16,9 @@ permissions:
 env:
   VAULT_ADDR: http://127.0.0.1:8212
   VAULT_NAMESPACE: ${{ secrets.VAULT_NAMESPACE }}
-  VAULT_ROLE_ID: ${{ secrets.VAULT_ROLE_ID }}
-  VAULT_SECRET_ID: ${{ secrets.VAULT_SECRET_ID }}
-  VAULT_PATH: 'secret/data/app-config'
   APP_NAME: python-app
   IMAGE_NAME: hello-world
-  HEALTH_URL: http://localhost:8080/health
+  HEALTH_URL: https://${{ secrets.AZURE_WEBAPP_NAME }}.azurewebsites.net/health
 
 concurrency:
   group: pipeline-${{ github.ref }}
@@ -57,6 +54,7 @@ jobs:
       art_url: ${{ steps.export.outputs.ART_URL }}
       art_repo: ${{ steps.export.outputs.ART_DOCKER_REPO }}
       art_user: ${{ steps.export.outputs.ART_USER }}
+      art_password: ${{ steps.export.outputs.ART_PASSWORD }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -68,7 +66,7 @@ jobs:
         id: vault
         uses: hashicorp/vault-action@v3
         with:
-          url: http://127.0.0.1:8212  # Hardcoded for testing
+          url: http://127.0.0.1:8212
           method: jwt
           path: jwt
           role: gh-actions
@@ -79,7 +77,8 @@ jobs:
           secrets: |
             ci/data/artifactory url          | ART_URL;
             ci/data/artifactory repo_docker  | ART_DOCKER_REPO;
-            ci/data/artifactory username     | ART_USER
+            ci/data/artifactory username     | ART_USER;
+            ci/data/artifactory password     | ART_PASSWORD
 
       - name: Export selected outputs
         id: export
@@ -87,12 +86,14 @@ jobs:
           echo "ART_URL=${ART_URL}" >> $GITHUB_OUTPUT
           echo "ART_DOCKER_REPO=${ART_DOCKER_REPO}" >> $GITHUB_OUTPUT
           echo "ART_USER=${ART_USER}" >> $GITHUB_OUTPUT
+          echo "ART_PASSWORD=${ART_PASSWORD}" >> $GITHUB_OUTPUT
 
       - name: Verify secrets
         run: |
           test -n "$ART_URL" || (echo "ART_URL missing" && exit 1)
           test -n "$ART_DOCKER_REPO" || (echo "ART_DOCKER_REPO missing" && exit 1)
           test -n "$ART_USER" || (echo "ART_USER missing" && exit 1)
+          test -n "$ART_PASSWORD" || (echo "ART_PASSWORD missing" && exit 1)
 
       - name: Revoke Vault token (optional)
         if: env.VAULT_TOKEN != ''
@@ -109,6 +110,7 @@ jobs:
       ART_URL: ${{ needs.get-secrets.outputs.art_url }}
       ART_DOCKER_REPO: ${{ needs.get-secrets.outputs.art_repo }}
       ART_USER: ${{ needs.get-secrets.outputs.art_user }}
+      ART_PASSWORD: ${{ needs.get-secrets.outputs.art_password }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -132,6 +134,9 @@ jobs:
           curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh
           trivy image "$IMAGE_NAME:ci"
 
+      - name: Docker login to JFrog
+        run: echo "$ART_PASSWORD" | docker login "$ART_URL" -u "$ART_USER" --password-stdin
+
       - name: Tag & push image to JFrog
         run: |
           IMAGE_REF="${ART_URL}/${ART_DOCKER_REPO}/${IMAGE_NAME}:$(git rev-parse --short HEAD)"
@@ -150,4 +155,3 @@ jobs:
 
       - name: Rollback strategy placeholder
         if: failure()
-        run: echo "Deployment failed. Trigger rollback or alert team."
