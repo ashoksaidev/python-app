@@ -1,53 +1,66 @@
 # ------------------------------------------------------------
-# CI/CD Pipeline for Python App — Authored by Ashok Saidev
-# Purpose: Secure deployment to Azure Web App with Vault OIDC,
-# Docker image management via JFrog, and vulnerability scanning.
+# CI/CD Workflow — Authored by Ashok Saidev
+# Purpose: Securely deploy a Python service to Azure Web App
+# This workflow uses:
+# - Vault OIDC for secrets management
+# - JFrog Artifactory for storing Docker images
+# - Trivy for scanning vulnerabilities
 # ------------------------------------------------------------
 
-name: CI/CD Pipeline
+# Name of the workflow (visible in GitHub Actions UI)
+name: deploy-python-service
 
+# Trigger conditions for running this workflow
 on:
   push:
     branches:
-      - main
+      - main                      # Run only when code is pushed to 'main' branch
     paths:
-      - 'src/**'
-      - '.github/workflows/test-runner.yml'
-  workflow_dispatch:
+      - 'src/**'                  # Run only if files in 'src/' change
+      - '.github/workflows/deploy.yml'  # Or if this workflow file itself changes
+  workflow_dispatch:              # Allow manual trigger from GitHub UI
 
+# Permissions required for GitHub Actions to access secrets and tokens
 permissions:
-  id-token: write
-  contents: read
+  id-token: write                 # Needed for OIDC authentication with Vault
+  contents: read                  # Allows reading repository contents
 
+# Environment variables used throughout the workflow
 env:
-  VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
-  VAULT_NAMESPACE: ${{ secrets.VAULT_NAMESPACE }}
-  HEALTH_URL: https://${{ secrets.AZURE_WEBAPP_NAME }}.azurewebsites.net/health
-  IMAGE_NAME: hello-world
+  VAULT_ADDR: ${{ secrets.VAULT_ADDR }}                       # Vault server address
+  VAULT_NAMESPACE: ${{ secrets.VAULT_NAMESPACE }}             # Vault namespace
+  HEALTHCHECK_URL: https://${{ secrets.AZURE_WEBAPP_NAME }}.azurewebsites.net/status  # Health check endpoint
+  IMAGE_NAME: python-service                                  # Docker image name
 
+# Define the job that runs the deployment steps
 jobs:
-  build-deploy:
-    runs-on: [self-hosted, Linux, X64]
+  deploy-artifact:
+    runs-on: [self-hosted, Linux, X64]  # Use a self-hosted Linux runner
 
     steps:
-      - name: Checkout code
+      # Step 1: Checkout the latest source code
+      - name: Checkout source code
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      # Step 2: Set up Python 3.10 environment
+      - name: Set up Python environment
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
+      # Step 3: Install required Python packages
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
           pip install pytest
 
-      - name: Run tests
+      # Step 4: Run unit tests (non-blocking if no tests found)
+      - name: Run unit tests
         run: |
           pytest || echo "No tests found"
 
-      - name: Inspect GitHub OIDC token
+      # Step 5: Decode GitHub OIDC token (for Vault authentication)
+      - name: Decode GitHub OIDC token
         run: |
           TOKEN_URL="${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://github.com/${{ github.repository_owner }}"
           IDTOKEN="$(curl -s -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "$TOKEN_URL")"
@@ -55,7 +68,8 @@ jobs:
           echo "Decoded OIDC token payload:"
           echo "$PAYLOAD" | jq
 
-      - name: Authenticate with Vault (OIDC)
+      # Step 6: Authenticate with Vault and fetch secrets
+      - name: Authenticate with Vault
         id: vault
         uses: hashicorp/vault-action@v3
         with:
@@ -67,28 +81,33 @@ jobs:
           namespace: ${{ secrets.VAULT_NAMESPACE }}
           exportEnv: true
           secrets: |
-            ci/data/artifactory url          | ART_URL;
-            ci/data/artifactory repo_docker  | ART_DOCKER_REPO;
-            ci/data/artifactory username     | ART_USER;
-            ci/data/artifactory password     | ART_PASSWORD
+            ci/data/artifactory url          | ARTIFACTORY_URL;
+            ci/data/artifactory repo_docker  | DOCKER_REPO;
+            ci/data/artifactory username     | ARTIFACTORY_USER;
+            ci/data/artifactory password     | ARTIFACTORY_PASSWORD
 
+      # Step 7: Log in to JFrog Docker registry using Vault secrets
       - name: Docker login to JFrog
-        run: echo "$ART_PASSWORD" | docker login "$ART_URL" -u "$ART_USER" --password-stdin
+        run: echo "$ARTIFACTORY_PASSWORD" | docker login "$ARTIFACTORY_URL" -u "$ARTIFACTORY_USER" --password-stdin
 
+      # Step 8: Build Docker image from current source code
       - name: Build Docker image
         run: docker build -t "$IMAGE_NAME:ci" .
 
+      # Step 9: Scan Docker image for vulnerabilities using Trivy
       - name: Scan image for vulnerabilities
         run: |
           curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh
           trivy image "$IMAGE_NAME:ci"
 
+      # Step 10: Tag and push Docker image to JFrog Artifactory
       - name: Tag & push image to JFrog
         run: |
-          IMAGE_REF="${ART_URL}/${ART_DOCKER_REPO}/${IMAGE_NAME}:$(git rev-parse --short HEAD)"
-          docker tag "$IMAGE_NAME:ci" "$IMAGE_REF"
-          docker push "$IMAGE_REF"
+          IMAGE_TAG="${ARTIFACTORY_URL}/${DOCKER_REPO}/${IMAGE_NAME}:$(git rev-parse --short HEAD)"
+          docker tag "$IMAGE_NAME:ci" "$IMAGE_TAG"
+          docker push "$IMAGE_TAG"
 
+      # Step 11: Deploy the app to Azure Web App using publish profile
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v2
         with:
@@ -96,5 +115,6 @@ jobs:
           publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
           package: .
 
+      # Step 12: Perform health check after deployment
       - name: Post-deployment health check
-        run: curl -f $HEALTH_URL || exit 1
+        run: curl -f $HEALTHCHECK_URL || exit 1
