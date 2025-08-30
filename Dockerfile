@@ -1,23 +1,28 @@
-# Stage 1: Build with Chainguard dev image
-FROM cgr.dev/chainguard/python:latest-dev AS builder
-WORKDIR /app
+# ------------------------------------------------------------
+# Multi-stage Dockerfile for FastAPI deployment
+# Stage 1: Build environment using Chainguard dev image
+# ------------------------------------------------------------
+FROM cgr.dev/chainguard/python:latest-dev AS build-env
+WORKDIR /opt/app
 
-# Install dependencies
+# Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy source code
+# Copy application source code
 COPY . .
 
-# Stage 2: Runtime with minimal Chainguard image
-FROM cgr.dev/chainguard/python:latest
-WORKDIR /app
+# ------------------------------------------------------------
+# Stage 2: Runtime environment using minimal Chainguard image
+# ------------------------------------------------------------
+FROM cgr.dev/chainguard/python:latest AS runtime-env
+WORKDIR /opt/app
 
-# Copy built app from builder stage
-COPY --from=builder /app /app
+# Copy built app from build stage
+COPY --from=build-env /opt/app /opt/app
 
-# Expose FastAPI port
+# Expose FastAPI default port
 EXPOSE 8080
 
-# Run FastAPI app using Uvicorn
-CMD ["uvicorn", "src.app:app", "--host", "0.0.0.0", "--port", "8080"]
+# Launch FastAPI app using Uvicorn
+CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8080"]
