@@ -2,17 +2,17 @@ version: 2
 
 updates:
   - package-ecosystem: "pip"
-    directory: "/python-app"                  # requirements.txt and pyproject.toml live here
+    directory: "/"  # requirements.txt and pyproject.toml are in root
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
 
   - package-ecosystem: "github-actions"
-    directory: "/.github/workflows"           # GitHub Actions workflows
+    directory: ".github/workflows"
     schedule:
       interval: "weekly"
 
   - package-ecosystem: "docker"
-    directory: "/python-app"                  # Dockerfile lives here
+    directory: "/"  # Dockerfile is in root
     schedule:
       interval: "weekly"
