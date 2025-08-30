@@ -1,27 +1,28 @@
 version: 2
+
 updates:
-  - package-ecosystem: "pip"
-    directory: "/"  # Python dependencies (requirements.txt, pyproject.toml)
+  - package-ecosystem: "pip"                  # Python dependencies (requirements.txt, pyproject.toml)
+    directory: "/"                            # Root directory of the project
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 5               # Limit the number of active PRs for pip updates
 
-  - package-ecosystem: "npm"
-    directory: "/"  # Frontend dependencies (package.json)
-    schedule:
-      interval: "weekly"
-
-  - package-ecosystem: "github-actions"
-    directory: "/"  # CI/CD workflow updates
+  - package-ecosystem: "npm"                  # JavaScript/Node.js frontend dependencies
+    directory: "/"                            # Root directory containing package.json
     schedule:
       interval: "weekly"
 
-  - package-ecosystem: "gradle"
-    directory: "/"  # Java build system (if used)
+  - package-ecosystem: "github-actions"       # GitHub Actions workflow updates
+    directory: "/"                            # Root directory containing workflow files
     schedule:
       interval: "weekly"
 
-  - package-ecosystem: "docker"
-    directory: "/"  # Dockerfile base image updates
+  - package-ecosystem: "gradle"               # Java build system dependencies
+    directory: "/"                            # Root directory containing build.gradle
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "docker"               # Docker base image updates
+    directory: "/"                            # Root directory containing Dockerfile
     schedule:
       interval: "weekly"
