@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 env:
-  VAULT_ADDR: http://127.0.0.1:8212
+  VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
   VAULT_NAMESPACE: ${{ secrets.VAULT_NAMESPACE }}
   HEALTH_URL: https://${{ secrets.AZURE_WEBAPP_NAME }}.azurewebsites.net/health
   IMAGE_NAME: hello-world
@@ -53,12 +53,12 @@ jobs:
         id: vault
         uses: hashicorp/vault-action@v3
         with:
-          url: http://127.0.0.1:8212
+          url: ${{ secrets.VAULT_ADDR }}
           method: jwt
           path: jwt
           role: gh-actions
           jwtGithubAudience: https://github.com/${{ github.repository_owner }}
-          namespace: ${{ env.VAULT_NAMESPACE }}
+          namespace: ${{ secrets.VAULT_NAMESPACE }}
           exportEnv: true
           secrets: |
             ci/data/artifactory url          | ART_URL;
@@ -74,4 +74,21 @@ jobs:
 
       - name: Scan image for vulnerabilities
         run: |
-          curl -sSfL https://raw
+          curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh
+          trivy image "$IMAGE_NAME:ci"
+
+      - name: Tag & push image to JFrog
+        run: |
+          IMAGE_REF="${ART_URL}/${ART_DOCKER_REPO}/${IMAGE_NAME}:$(git rev-parse --short HEAD)"
+          docker tag "$IMAGE_NAME:ci" "$IMAGE_REF"
+          docker push "$IMAGE_REF"
+
+      - name: Deploy to Azure Web App
+        uses: azure/webapps-deploy@v2
+        with:
+          app-name: ${{ secrets.AZURE_WEBAPP_NAME }}
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+          package: .
+
+      - name: Post-deployment health check
+        run: curl -f $HEALTH_URL || exit 1
