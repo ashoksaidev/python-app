@@ -1,2 +1,2 @@
-fastapi==0.110.0
-uvicorn[standard]==0.29.0
+echo "fastapi==0.110.0" > requirements.txt
+echo "uvicorn[standard]==0.29.0" >> requirements.txt
