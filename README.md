@@ -1,14 +1,27 @@
+# artifact-deployer
 
-## ⚙️ CI/CD Trigger
+A lightweight FastAPI service used to validate secure CI/CD workflows integrating Vault (OIDC), JFrog Artifactory, and Azure Web App deployment.
 
-This pipeline runs automatically on:
+## 🔧 Stack Overview
 
-- Pushes to the `main` branch affecting:
-  - Files under `src/**`
-  - The workflow file itself
-- Manual trigger via **"Run workflow"** in GitHub Actions
+- **FastAPI** — RESTful service layer
+- **Vault (OIDC)** — dynamic secrets management
+- **JFrog Artifactory** — container registry for image storage
+- **Azure Web App** — cloud hosting platform
+- **GitHub Actions** — CI/CD orchestration
 
-## 🧪 Expected Output
+## ⚙️ Pipeline Triggers
+
+This workflow runs automatically on:
+
+- Commits pushed to the `main` branch that modify:
+  - Application source files (`src/**`)
+  - CI/CD workflow file (`.github/workflows/test-runner.yml`)
+- Manual execution via the **"Run workflow"** button in GitHub Actions
+
+## 🚀 Runtime Behavior
+
+Once deployed, the service exposes a status endpoint:
 
 ```bash
-Hello from a super-fast POC pipeline!
+GET /status
