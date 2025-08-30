@@ -16,101 +16,13 @@ permissions:
 env:
   VAULT_ADDR: http://127.0.0.1:8212
   VAULT_NAMESPACE: ${{ secrets.VAULT_NAMESPACE }}
-  APP_NAME: python-app
-  IMAGE_NAME: hello-world
   HEALTH_URL: https://${{ secrets.AZURE_WEBAPP_NAME }}.azurewebsites.net/health
-
-concurrency:
-  group: pipeline-${{ github.ref }}
-  cancel-in-progress: true
+  IMAGE_NAME: hello-world
 
 jobs:
-  oidc-smoke:
-    name: ci • OIDC availability
+  build-deploy:
     runs-on: [self-hosted, Linux, X64]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
 
-      - name: Inspect OIDC token
-        env:
-          REPO_OWNER: ${{ github.repository_owner }}
-        run: |
-          set -e
-          command -v jq >/dev/null || (sudo apt-get update -y && sudo apt-get install -y jq)
-          TOKEN_URL="${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://github.com/${REPO_OWNER}"
-          IDTOKEN="$(curl -s -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "$TOKEN_URL" | jq -r .value)"
-          PAYLOAD="$(printf '%s' "$IDTOKEN" | cut -d '.' -f2 | base64 -d 2>/dev/null || true)"
-          echo "aud from OIDC token:"
-          echo "$PAYLOAD" | jq -r '.aud'
-          echo "iss from OIDC token:"
-          echo "$PAYLOAD" | jq -r '.iss'
-
-  get-secrets:
-    name: ci • Get Vault secrets (OIDC)
-    needs: oidc-smoke
-    runs-on: [self-hosted, Linux, X64]
-    outputs:
-      art_url: ${{ steps.export.outputs.ART_URL }}
-      art_repo: ${{ steps.export.outputs.ART_DOCKER_REPO }}
-      art_user: ${{ steps.export.outputs.ART_USER }}
-      art_password: ${{ steps.export.outputs.ART_PASSWORD }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Debug Vault URL
-        run: echo "Vault URL: $VAULT_ADDR"
-
-      - name: vault • read JFrog creds (OIDC)
-        id: vault
-        uses: hashicorp/vault-action@v3
-        with:
-          url: http://127.0.0.1:8212
-          method: jwt
-          path: jwt
-          role: gh-actions
-          jwtGithubAudience: https://github.com/${{ github.repository_owner }}
-          namespace: ${{ env.VAULT_NAMESPACE }}
-          exportEnv: true
-          exportToken: true
-          secrets: |
-            ci/data/artifactory url          | ART_URL;
-            ci/data/artifactory repo_docker  | ART_DOCKER_REPO;
-            ci/data/artifactory username     | ART_USER;
-            ci/data/artifactory password     | ART_PASSWORD
-
-      - name: Export selected outputs
-        id: export
-        run: |
-          echo "ART_URL=${ART_URL}" >> $GITHUB_OUTPUT
-          echo "ART_DOCKER_REPO=${ART_DOCKER_REPO}" >> $GITHUB_OUTPUT
-          echo "ART_USER=${ART_USER}" >> $GITHUB_OUTPUT
-          echo "ART_PASSWORD=${ART_PASSWORD}" >> $GITHUB_OUTPUT
-
-      - name: Verify secrets
-        run: |
-          test -n "$ART_URL" || (echo "ART_URL missing" && exit 1)
-          test -n "$ART_DOCKER_REPO" || (echo "ART_DOCKER_REPO missing" && exit 1)
-          test -n "$ART_USER" || (echo "ART_USER missing" && exit 1)
-          test -n "$ART_PASSWORD" || (echo "ART_PASSWORD missing" && exit 1)
-
-      - name: Revoke Vault token (optional)
-        if: env.VAULT_TOKEN != ''
-        env:
-          VAULT_TOKEN: ${{ env.VAULT_TOKEN }}
-        run: |
-          curl -s -X POST -H "X-Vault-Token: $VAULT_TOKEN" "${VAULT_ADDR}/v1/auth/token/revoke-self" || true
-
-  build-test-deploy:
-    name: ci • Build, test, scan, deploy
-    needs: get-secrets
-    runs-on: [self-hosted, Linux, X64]
-    env:
-      ART_URL: ${{ needs.get-secrets.outputs.art_url }}
-      ART_DOCKER_REPO: ${{ needs.get-secrets.outputs.art_repo }}
-      ART_USER: ${{ needs.get-secrets.outputs.art_user }}
-      ART_PASSWORD: ${{ needs.get-secrets.outputs.art_password }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -126,6 +38,26 @@ jobs:
       - name: Run tests
         run: pytest
 
+      - name: Authenticate with Vault (OIDC)
+        id: vault
+        uses: hashicorp/vault-action@v3
+        with:
+          url: http://127.0.0.1:8212
+          method: jwt
+          path: jwt
+          role: gh-actions
+          jwtGithubAudience: https://github.com/${{ github.repository_owner }}
+          namespace: ${{ env.VAULT_NAMESPACE }}
+          exportEnv: true
+          secrets: |
+            ci/data/artifactory url          | ART_URL;
+            ci/data/artifactory repo_docker  | ART_DOCKER_REPO;
+            ci/data/artifactory username     | ART_USER;
+            ci/data/artifactory password     | ART_PASSWORD
+
+      - name: Docker login to JFrog
+        run: echo "$ART_PASSWORD" | docker login "$ART_URL" -u "$ART_USER" --password-stdin
+
       - name: Build Docker image
         run: docker build -t "$IMAGE_NAME:ci" .
 
@@ -133,9 +65,6 @@ jobs:
         run: |
           curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh
           trivy image "$IMAGE_NAME:ci"
-
-      - name: Docker login to JFrog
-        run: echo "$ART_PASSWORD" | docker login "$ART_URL" -u "$ART_USER" --password-stdin
 
       - name: Tag & push image to JFrog
         run: |
@@ -152,6 +81,3 @@ jobs:
 
       - name: Post-deployment health check
         run: curl -f $HEALTH_URL || exit 1
-
-      - name: Rollback strategy placeholder
-        if: failure()
