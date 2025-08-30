@@ -2,27 +2,27 @@ version: 2
 
 updates:
   - package-ecosystem: "pip"
-    directory: "/"                            # requirements.txt must be here
+    directory: "/"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
 
   - package-ecosystem: "npm"
-    directory: "/"                            # package.json must be here
+    directory: "/"
     schedule:
       interval: "weekly"
 
   - package-ecosystem: "github-actions"
-    directory: ".github/workflows"            # points to actual workflow folder
+    directory: ".github/workflows"
     schedule:
       interval: "weekly"
 
   - package-ecosystem: "gradle"
-    directory: "/"                            # build.gradle must be here
+    directory: "/"
     schedule:
       interval: "weekly"
 
   - package-ecosystem: "docker"
-    directory: "/"                            # Dockerfile must be here
+    directory: "/"
     schedule:
       interval: "weekly"
