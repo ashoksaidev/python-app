@@ -1,3 +1,9 @@
+# ------------------------------------------------------------
+# CI/CD Pipeline for Python App — Authored by Ashok Saidev
+# Purpose: Secure deployment to Azure Web App with Vault OIDC,
+# Docker image management via JFrog, and vulnerability scanning.
+# ------------------------------------------------------------
+
 name: CI/CD Pipeline
 
 on:
