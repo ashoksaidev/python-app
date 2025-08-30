@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "hello-poc-art"          # package name
-version = "0.0.1"               # first POC version
-description = "Minimal POC package"
+name = "artifact_deployer"
+version = "0.1.0"
+description = "POC for CI/CD artifact deployment"
 requires-python = ">=3.8"
 
 [tool.setuptools]
