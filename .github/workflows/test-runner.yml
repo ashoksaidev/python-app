@@ -44,4 +44,34 @@ jobs:
       - name: Inspect GitHub OIDC token
         run: |
           TOKEN_URL="${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://github.com/${{ github.repository_owner }}"
-          IDTOKEN="$(curl -s -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "$TOKEN
+          IDTOKEN="$(curl -s -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "$TOKEN_URL")"
+          PAYLOAD="$(echo "$IDTOKEN" | cut -d '.' -f2 | base64 -d 2>/dev/null)"
+          echo "Decoded OIDC token payload:"
+          echo "$PAYLOAD" | jq
+
+      - name: Authenticate with Vault (OIDC)
+        id: vault
+        uses: hashicorp/vault-action@v3
+        with:
+          url: http://127.0.0.1:8212
+          method: jwt
+          path: jwt
+          role: gh-actions
+          jwtGithubAudience: https://github.com/${{ github.repository_owner }}
+          namespace: ${{ env.VAULT_NAMESPACE }}
+          exportEnv: true
+          secrets: |
+            ci/data/artifactory url          | ART_URL;
+            ci/data/artifactory repo_docker  | ART_DOCKER_REPO;
+            ci/data/artifactory username     | ART_USER;
+            ci/data/artifactory password     | ART_PASSWORD
+
+      - name: Docker login to JFrog
+        run: echo "$ART_PASSWORD" | docker login "$ART_URL" -u "$ART_USER" --password-stdin
+
+      - name: Build Docker image
+        run: docker build -t "$IMAGE_NAME:ci" .
+
+      - name: Scan image for vulnerabilities
+        run: |
+          curl -sSfL https://raw
