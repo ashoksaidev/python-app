@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 env:
-  VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
+  VAULT_ADDR: http://127.0.0.1:8212
   VAULT_NAMESPACE: ${{ secrets.VAULT_NAMESPACE }}
   VAULT_ROLE_ID: ${{ secrets.VAULT_ROLE_ID }}
   VAULT_SECRET_ID: ${{ secrets.VAULT_SECRET_ID }}
@@ -101,7 +101,7 @@ jobs:
   build-test-deploy:
     name: ci • Build, test, scan, deploy
     needs: get-secrets
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     env:
       ART_URL: ${{ needs.get-secrets.outputs.art_url }}
       ART_DOCKER_REPO: ${{ needs.get-secrets.outputs.art_repo }}
