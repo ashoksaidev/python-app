@@ -1,9 +1,5 @@
-# Python
+.git
 __pycache__/
+tests/
 *.pyc
-.venv/
-
-# OS/Editors
-.DS_Store
-.vscode/
-.idea/
+.env
