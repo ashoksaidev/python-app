@@ -61,11 +61,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Debug Vault URL
+        run: echo "Vault URL: $VAULT_ADDR"
+
       - name: vault • read JFrog creds (OIDC)
         id: vault
         uses: hashicorp/vault-action@v3
         with:
-          url: ${{ env.VAULT_ADDR }}
+          url: http://127.0.0.1:8212  # Hardcoded for testing
           method: jwt
           path: jwt
           role: gh-actions
