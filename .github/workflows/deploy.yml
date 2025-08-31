@@ -27,6 +27,7 @@ permissions:
 env:
   VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
   VAULT_NAMESPACE: ${{ secrets.VAULT_NAMESPACE }}
+  IMAGE_INPUT: ${{ github.event.inputs.image_tag }}
 
 jobs:
   deploy_application:
@@ -51,6 +52,17 @@ jobs:
             ci/data/artifactory repo_docker  | DOCKER_REPO
             ci/data/artifactory username     | ARTIFACTORY_USER
             ci/data/artifactory password     | ARTIFACTORY_PASSWORD
+
+      - name: Validate Image Tag
+        run: |
+          if [ -z "$IMAGE_INPUT" ]; then
+            echo "No image tag provided — supply via workflow_dispatch input 'image_tag'"
+            exit 1
+          fi
+          echo "image_to_deploy=$IMAGE_INPUT" >> $GITHUB_OUTPUT
+        shell: bash
+        env:
+          IMAGE_INPUT: ${{ github.event.inputs.image_tag }}
 
       - name: Authenticate with Artifactory
         run: echo "$ARTIFACTORY_PASSWORD" | docker login "$ARTIFACTORY_URL" -u "$ARTIFACTORY_USER" --password-stdin
