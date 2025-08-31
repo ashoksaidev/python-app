@@ -1,4 +1,4 @@
-# Deploy workflow (CD) - corrected Vault usage & debug step
+# Deploy workflow: reads Artifactory credentials from Vault (OIDC) and deploys an image to k8s / azure webapp / vm
 name: deploy-artifact
 
 on:
@@ -86,7 +86,6 @@ jobs:
       - name: Pull image from Artifactory (verify existence)
         run: |
           IMAGE_INPUT="${{ github.event.inputs.image_tag }}"
-          # if user supplied a short tag (no slash), assemble full path
           if ! echo "$IMAGE_INPUT" | grep -q '/'; then
             IMAGE="${ARTIFACTORY_URL}/${DOCKER_REPO}/${IMAGE_INPUT}"
           else
@@ -94,7 +93,6 @@ jobs:
           fi
           echo "Attempting to docker pull $IMAGE"
           docker pull "$IMAGE"
-          echo "pulled_image=$IMAGE" >> $GITHUB_OUTPUT
 
       - name: Deploy to Kubernetes - set image
         if: ${{ github.event.inputs.deploy_target == 'kubernetes' }}
