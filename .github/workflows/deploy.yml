@@ -1,7 +1,4 @@
-# Deploy workflow (CD)
-# - Retrieves Artifactory creds from HashiCorp Vault (OIDC)
-# - Authenticates to JFrog Artifactory
-# - Deploys an image to Kubernetes, Azure Web App, or a VM
+# Deploy workflow (CD) - corrected Vault usage & debug step
 name: deploy-artifact
 
 on:
@@ -19,7 +16,7 @@ on:
         required: false
         default: 'default'
       k8s_deployment:
-        description: 'K8s Deployment name (container image will be updated in this deployment)'
+        description: 'K8s Deployment name'
         required: false
       vm_host:
         description: 'VM host (for vm target)'
@@ -31,13 +28,8 @@ on:
         description: 'Azure resource group (for azure_webapp target)'
         required: false
       healthcheck_url:
-        description: 'Optional healthcheck URL (if left blank derived from AZURE_WEBAPP_NAME for azure_webapp)'
+        description: 'Optional healthcheck URL'
         required: false
-  push:
-    branches:
-      - main
-    paths:
-      - '.github/workflows/deploy.yml'
 
 permissions:
   id-token: write
@@ -58,12 +50,11 @@ jobs:
 
       - name: Debug: check Vault reachability (temporary)
         run: |
-          echo "Checking VAULT_ADDR (not printing secret value)"
+          echo "Validating VAULT_ADDR secret presence and reachability (does not print the value)"
           if [ -z "${{ secrets.VAULT_ADDR }}" ]; then
-            echo "VAULT_ADDR secret is not set in this repository/org"
-            exit 1
+            echo "VAULT_ADDR secret is not set in repository or org"; exit 1
           fi
-          curl -fsS --connect-timeout 5 "${{ secrets.VAULT_ADDR }}/v1/sys/health" || (echo "Vault unreachable from runner" && exit 1)
+          curl -fsS --connect-timeout 5 "${{ secrets.VAULT_ADDR }}/v1/sys/health" || (echo "Vault unreachable from runner"; exit 1)
 
       - name: Authenticate with Vault (GitHub OIDC)
         id: vault
@@ -85,8 +76,7 @@ jobs:
       - name: Ensure image tag is provided
         run: |
           if [ -z "${{ env.IMAGE_INPUT }}" ]; then
-            echo "No image tag provided — supply via workflow_dispatch input 'image_tag'"
-            exit 1
+            echo "No image tag provided — supply via workflow_dispatch input 'image_tag'"; exit 1
           fi
           echo "image_to_deploy=${{ env.IMAGE_INPUT }}" >> $GITHUB_OUTPUT
 
@@ -110,29 +100,27 @@ jobs:
           KUBECONFIG_CONTENT: ${{ secrets.KUBECONFIG }}
         run: |
           if [ -z "${{ github.event.inputs.k8s_deployment }}" ]; then
-            echo "k8s_deployment must be provided for kubernetes target"
-            exit 1
+            echo "k8s_deployment must be provided for kubernetes target"; exit 1
           fi
           mkdir -p $HOME/.kube
           echo "$KUBECONFIG_CONTENT" > $HOME/.kube/config
           chmod 600 $HOME/.kube/config
-          IMAGE="${{ steps.vault.outputs.ARTIFACTORY_URL || env.ARTIFACTORY_URL }}/$({{ steps.vault.outputs.DOCKER_REPO || env.DOCKER_REPO }})/${{ env.IMAGE_INPUT }}"
-          SUPPLIED="${{ env.IMAGE_INPUT }}"
-          if echo "$SUPPLIED" | grep -q '/'; then
-            IMAGE="$SUPPLIED"
+          IMAGE="${{ env.IMAGE_INPUT }}"
+          if ! echo "$IMAGE" | grep -q '/'; then
+            IMAGE="${ARTIFACTORY_URL}/${DOCKER_REPO}/${IMAGE}"
           fi
           NAMESPACE="${{ github.event.inputs.k8s_namespace }}"
           DEPLOY="${{ github.event.inputs.k8s_deployment }}"
           kubectl set image deployment/"${DEPLOY}" "*=${IMAGE}" -n "${NAMESPACE}"
           kubectl rollout status deployment/"${DEPLOY}" -n "${NAMESPACE}" --timeout=120s
 
-      - name: Azure login
+      - name: Azure login (if azure_webapp target)
         if: ${{ github.event.inputs.deploy_target == 'azure_webapp' }}
         uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Configure Web App container to use image from Artifactory (Azure)
+      - name: Configure Web App container to use image (Azure)
         if: ${{ github.event.inputs.deploy_target == 'azure_webapp' }}
         env:
           IMAGE_TAG: ${{ github.event.inputs.image_tag }}
@@ -159,12 +147,10 @@ jobs:
           VM_USER: ${{ github.event.inputs.vm_user }}
         run: |
           if [ -z "$VM_HOST" ] || [ -z "$VM_USER" ]; then
-            echo "vm_host and vm_user inputs are required for vm deploy target"
-            exit 1
+            echo "vm_host and vm_user inputs are required for vm deploy target"; exit 1
           fi
           if [ -z "${{ secrets.VM_SSH_KEY }}" ]; then
-            echo "Secret VM_SSH_KEY is required for VM deployment (private key)"
-            exit 1
+            echo "Secret VM_SSH_KEY is required for VM deployment (private key)"; exit 1
           fi
           mkdir -p ~/.ssh
           echo "${{ secrets.VM_SSH_KEY }}" > ~/.ssh/deploy_key
@@ -176,14 +162,12 @@ jobs:
           SSH="ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key ${VM_USER}@${VM_HOST}"
           $SSH "docker login ${ARTIFACTORY_URL} -u ${ARTIFACTORY_USER} -p '${ARTIFACTORY_PASSWORD}' && docker pull ${IMAGE} && docker stop app || true && docker rm app || true && docker run -d --name app -p 80:80 ${IMAGE}"
 
-      - name: Wait and do healthcheck (optional)
+      - name: Optional healthcheck
         env:
           HEALTH: ${{ github.event.inputs.healthcheck_url || secrets.HEALTHCHECK_URL || '' }}
         run: |
           if [ -z "$HEALTH" ]; then
-            echo "No healthcheck URL provided; skipping healthcheck."
-            exit 0
+            echo "No healthcheck URL provided; skipping healthcheck." ; exit 0
           fi
-          echo "Waiting 10s for the app to come up..."
           sleep 10
           curl -f "$HEALTH"
