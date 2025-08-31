@@ -14,7 +14,7 @@ COPY src/ ./src/
 FROM cgr.dev/chainguard/python:latest AS runtime-env
 WORKDIR /opt/app
 
-# Copy source and installed packages from build stage (if packages installed to site-packages inside image)
+# Copy source and installed packages from build stage
 COPY --from=build-env /opt/app /opt/app
 
 # Ensure python can find package under /opt/app/src
