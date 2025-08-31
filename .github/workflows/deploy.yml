@@ -47,10 +47,10 @@ jobs:
           jwtGithubAudience: https://github.com/ashoksaidev
           exportEnv: true
           secrets: |
-            ci/data/artifactory url          | ARTIFACTORY_URL
-            ci/data/artifactory repo_docker  | DOCKER_REPO
-            ci/data/artifactory username     | ARTIFACTORY_USER
-            ci/data/artifactory password     | ARTIFACTORY_PASSWORD
+            ci/data/artifactory url | ARTIFACTORY_URL
+            ci/data/artifactory repo_docker | DOCKER_REPO
+            ci/data/artifactory username | ARTIFACTORY_USER
+            ci/data/artifactory password | ARTIFACTORY_PASSWORD
           kubernetesTokenPath: /var/run/secrets/kubernetes.io/serviceaccount/token
           exportToken: false
           outputToken: false
