@@ -1,25 +1,34 @@
-# Multi-stage Dockerfile using Chainguard base images
-# Stage 1: build environment
-FROM cgr.dev/chainguard/python:latest-dev AS build-env
-WORKDIR /opt/app
+# ------------------------------------------------------------------------------
+# Multi-stage Dockerfile for CI/CD Artifact Deployment Service
+# ------------------------------------------------------------------------------
+# Stage 1: Build environment using Chainguard Python dev image
+FROM cgr.dev/chainguard/python:latest-dev AS build-stage
+
+# Set working directory for build
+WORKDIR /app
 
 # Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application source code
-COPY src/ ./src/
+COPY src/ src/
 
-# Stage 2: runtime environment with minimal Chainguard image
-FROM cgr.dev/chainguard/python:latest AS runtime-env
-WORKDIR /opt/app
+# ------------------------------------------------------------------------------
+# Stage 2: Runtime environment using minimal Chainguard Python image
+FROM cgr.dev/chainguard/python:latest AS runtime-stage
 
-# Copy source and installed packages from build stage
-COPY --from=build-env /opt/app /opt/app
+# Set working directory for runtime
+WORKDIR /app
 
-# Ensure python can find package under /opt/app/src
-ENV PYTHONPATH=/opt/app/src
+# Copy built app and dependencies from build stage
+COPY --from=build-stage /app /app
 
+# Set Python path to include source directory
+ENV PYTHONPATH=/app/src
+
+# Expose application port
 EXPOSE 8080
 
+# Start FastAPI application using Uvicorn
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
