@@ -21,13 +21,25 @@ jobs:
           roleId: ${{ secrets.VAULT_ROLE_ID }}
           secretId: ${{ secrets.VAULT_SECRET_ID }}
           secrets: |
-            ci/data/artifactory url=ARTIFACTORY_URL
-            ci/data/artifactory repo_docker=DOCKER_REPO
-            ci/data/artifactory username=ARTIFACTORY_USER
-            ci/data/artifactory password=ARTIFACTORY_PASSWORD
+            ci/artifactory url=ARTIFACTORY_URL
+            ci/artifactory repo_docker=DOCKER_REPO
+            ci/artifactory username=ARTIFACTORY_USER
+            ci/artifactory password=ARTIFACTORY_PASSWORD
 
-      - name: Deploy application
+      - name: Build Docker Image
+        run: docker build -t artifact-service .
+
+      - name: Run Container
         run: |
-          echo "Deploying with Artifactory credentials..."
-          echo "URL: $ARTIFACTORY_URL"
-          echo "User: $ARTIFACTORY_USER"
+          docker run -d -p 8080:8080 --name artifact-service \
+            -e ARTIFACTORY_URL=$ARTIFACTORY_URL \
+            -e DOCKER_REPO=$DOCKER_REPO \
+            -e ARTIFACTORY_USER=$ARTIFACTORY_USER \
+            -e ARTIFACTORY_PASSWORD=$ARTIFACTORY_PASSWORD \
+            artifact-service
+
+      - name: Health Check
+        run: |
+          echo "Checking service health..."
+          sleep 5
+          curl -f http://localhost:8080/health
