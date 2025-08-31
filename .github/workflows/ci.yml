@@ -66,29 +66,35 @@ jobs:
             ci/data/artifactory password     | ARTIFACTORY_PASSWORD
 
       - name: Build Docker image
+        id: build-image
         run: |
-          IMAGE_TAG="${IMAGE_NAME}:ci-$(git rev-parse --short HEAD)"
+          SHORT="$(git rev-parse --short HEAD)"
+          IMAGE_TAG="${IMAGE_NAME}:ci-${SHORT}"
           docker build -t "$IMAGE_TAG" .
           echo "local_image=$IMAGE_TAG" >> $GITHUB_OUTPUT
 
-      - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@v1
+      - name: Scan image with Trivy (pinned action)
+        uses: aquasecurity/trivy-action@0.31.0
         with:
-          image-ref: ${{ steps.build.outputs.local_image || steps.build_and_push.outputs.local_image || env.IMAGE_NAME }} # best-effort; main thing is to run trivy
-          format: 'table'
-          exit-code: '1'  # fail on vulnerabilities (adjust to '0' to only warn)
+          image-ref: ${{ steps.build-image.outputs.local_image }}
+          format: table
+          exit-code: 1
+          severity: CRITICAL,HIGH
 
       - name: Docker login to JFrog Artifactory
         run: |
           echo "$ARTIFACTORY_PASSWORD" | docker login "$ARTIFACTORY_URL" -u "$ARTIFACTORY_USER" --password-stdin
 
       - name: Tag & push image to Artifactory
+        id: push-image
         run: |
           SHORT="$(git rev-parse --short HEAD)"
-          IMAGE_TAG="${ARTIFACTORY_URL}/${DOCKER_REPO}/${IMAGE_NAME}:${SHORT}"
-          docker tag "python-service:ci-${SHORT}" "$IMAGE_TAG" || docker tag "python-service:ci-$(git rev-parse --short HEAD)" "$IMAGE_TAG"
-          docker push "$IMAGE_TAG"
-          echo "$IMAGE_TAG" > image-tag.txt
+          IMAGE_ARTIFACT="${ARTIFACTORY_URL}/${DOCKER_REPO}/${IMAGE_NAME}:${SHORT}"
+          docker tag "${{ steps.build-image.outputs.local_image }}" "$IMAGE_ARTIFACT"
+          docker push "$IMAGE_ARTIFACT"
+          echo "image_artifact=$IMAGE_ARTIFACT" >> $GITHUB_OUTPUT
+          echo "$IMAGE_ARTIFACT" > image-tag.txt
+
       - name: Upload image tag artifact
         uses: actions/upload-artifact@v4
         with:
