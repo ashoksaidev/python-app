@@ -1,17 +1,35 @@
 version: 2
 updates:
   - package-ecosystem: "pip"
-    directory: "/"  # requirements.txt and pyproject.toml are in root
+    directory: "/"  # Python dependencies (requirements.txt, pyproject.toml) at project root
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "python"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
 
   - package-ecosystem: "docker"
-    directory: "/"  # Dockerfile is in root
+    directory: "/"  # Dockerfile located at project root
     schedule:
       interval: "weekly"
+    labels:
+      - "dependencies"
+      - "docker"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
 
   - package-ecosystem: "github-actions"
-    directory: ".github/workflows"
+    directory: ".github/workflows"  # GitHub Actions workflows directory
     schedule:
       interval: "weekly"
+    labels:
+      - "dependencies"
+      - "ci"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
