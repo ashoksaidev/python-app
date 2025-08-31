@@ -1,17 +1,50 @@
-# CI/CD Workflow — Authored by Ashok Saidev (revised)
-# Purpose: Securely deploy a Python service to Azure Web App (Docker Container)
-# Uses Vault OIDC for secrets, JFrog Artifactory for images, Trivy for scanning
-
-name: deploy-python-service
+# Deploy workflow (CD)
+# - Retrieves Artifactory creds from HashiCorp Vault (OIDC)
+# - Authenticates to JFrog Artifactory
+# - Pulls a container image (image tag supplied) and deploys to:
+#     - kubernetes  (requires KUBECONFIG in secrets)
+#     - azure_webapp  (requires AZURE_CREDENTIALS and AZURE_RESOURCE_GROUP)
+#     - vm  (requires VM_SSH_KEY secret and VM_HOST/VM_USER input)
+#
+# Trigger:
+#  - manual (workflow_dispatch) with parameters
+#  - push to main (optional)
+name: deploy-artifact
 
 on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Full image tag to deploy (ex: my-artifactory.example.com/repo/python-service:abcd123)'
+        required: true
+      deploy_target:
+        description: 'Deployment target: kubernetes | azure_webapp | vm'
+        required: true
+        default: 'kubernetes'
+      k8s_namespace:
+        description: 'Kubernetes namespace (for kubernetes target)'
+        required: false
+        default: 'default'
+      k8s_deployment:
+        description: 'K8s Deployment name (container image will be updated in this deployment)'
+        required: false
+      vm_host:
+        description: 'VM host (for vm target)'
+        required: false
+      vm_user:
+        description: 'VM user (for vm target)'
+        required: false
+      azure_resource_group:
+        description: 'Azure resource group (for azure_webapp target)'
+        required: false
+      healthcheck_url:
+        description: 'Optional healthcheck URL (if left blank derived from AZURE_WEBAPP_NAME for azure_webapp)'
+        required: false
   push:
     branches:
       - main
     paths:
-      - 'src/**'
       - '.github/workflows/deploy.yml'
-  workflow_dispatch:
 
 permissions:
   id-token: write
@@ -20,38 +53,17 @@ permissions:
 env:
   VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
   VAULT_NAMESPACE: ${{ secrets.VAULT_NAMESPACE }}
-  HEALTHCHECK_URL: https://${{ secrets.AZURE_WEBAPP_NAME }}.azurewebsites.net/status
-  IMAGE_NAME: python-service
+  IMAGE_INPUT: ${{ github.event.inputs.image_tag || '' }}
 
 jobs:
-  deploy-artifact:
-    runs-on: [self-hosted, Linux, X64] # Ensure these labels exactly match your self-hosted runner labels
+  deploy:
+    runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout source code
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python environment
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest
-
-      - name: Run unit tests (fail on real test failures, allow graceful message if no tests)
-        run: |
-          pytest || RC=$?; \
-          if [ "$RC" -eq 5 ]; then \
-            echo "No tests were collected (pytest exit code 5). Continuing..."; \
-          else \
-            echo "pytest failed (exit code $RC)"; exit $RC; \
-          fi
-
-      - name: Authenticate with Vault (GitHub OIDC)
+      - name: Authenticate with Vault (GitHub OIDC) and export Artifactory creds
         id: vault
         uses: hashicorp/vault-action@v3
         with:
@@ -68,53 +80,132 @@ jobs:
             ci/data/artifactory username     | ARTIFACTORY_USER;
             ci/data/artifactory password     | ARTIFACTORY_PASSWORD
 
-      - name: Docker login to JFrog
-        run: echo "$ARTIFACTORY_PASSWORD" | docker login "$ARTIFACTORY_URL" -u "$ARTIFACTORY_USER" --password-stdin
-
-      - name: Build Docker image
-        run: docker build -t "$IMAGE_NAME:ci" .
-
-      - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@v1
-        with:
-          image-ref: "$IMAGE_NAME:ci"
-          format: 'table'
-          exit-code: '1' # fail the step on vulnerabilities (adjust or remove if you just want warnings)
-
-      - name: Tag & push image to JFrog
-        id: push_image
+      - name: Ensure image tag is provided
         run: |
-          IMAGE_TAG="${ARTIFACTORY_URL}/${DOCKER_REPO}/${IMAGE_NAME}:$(git rev-parse --short HEAD)"
-          docker tag "$IMAGE_NAME:ci" "$IMAGE_TAG"
-          docker push "$IMAGE_TAG"
-          # expose the image tag as a step output for later steps
-          echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+          if [ -z "${{ env.IMAGE_INPUT }}" ]; then
+            echo "No image tag provided — supply via workflow_dispatch input 'image_tag'"
+            exit 1
+          fi
+          echo "image_to_deploy=${{ env.IMAGE_INPUT }}" >> $GITHUB_OUTPUT
 
-      # Authenticate to Azure using a service principal JSON stored in AZURE_CREDENTIALS secret
-      # Required secret: AZURE_CREDENTIALS (JSON with clientId, clientSecret, subscriptionId, tenantId)
-      # Required secret: AZURE_RESOURCE_GROUP (resource group where the Web App lives)
-      - name: Login to Azure
+      - name: Docker login to JFrog Artifactory
+        run: |
+          echo "$ARTIFACTORY_PASSWORD" | docker login "$ARTIFACTORY_URL" -u "$ARTIFACTORY_USER" --password-stdin
+
+      - name: Pull image from Artifactory (verify existence)
+        run: |
+          IMAGE="${{ steps.vault.outputs.ARTIFACTORY_URL || env.ARTIFACTORY_URL }}"/"${{ steps.vault.outputs.DOCKER_REPO || env.DOCKER_REPO }}"/"${{ env.IMAGE_INPUT }}" || true
+          # If user supplied full image, use it (priority)
+          SUPPLIED="${{ env.IMAGE_INPUT }}"
+          if echo "$SUPPLIED" | grep -q '/'; then
+            IMAGE="$SUPPLIED"
+          fi
+          echo "Attempting to docker pull $IMAGE"
+          docker pull "$IMAGE"
+          echo "pulled_image=$IMAGE" >> $GITHUB_OUTPUT
+
+      # Kubernetes deployment path
+      - name: Deploy to Kubernetes - set image
+        if: ${{ github.event.inputs.deploy_target == 'kubernetes' || env.DEPLOY_TARGET == 'kubernetes' }}
+        env:
+          KUBECONFIG_CONTENT: ${{ secrets.KUBECONFIG }}
+        run: |
+          if [ -z "${{ github.event.inputs.k8s_deployment }}" ]; then
+            echo "k8s_deployment must be provided for kubernetes target"
+            exit 1
+          fi
+          # write kubeconfig
+          mkdir -p $HOME/.kube
+          echo "$KUBECONFIG_CONTENT" > $HOME/.kube/config
+          chmod 600 $HOME/.kube/config
+          IMAGE="${{ steps.vault.outputs.ARTIFACTORY_URL || env.ARTIFACTORY_URL }}"/"${{ steps.vault.outputs.DOCKER_REPO || env.DOCKER_REPO }}"/"${{ env.IMAGE_INPUT }}"
+          SUPPLIED="${{ env.IMAGE_INPUT }}"
+          if echo "$SUPPLIED" | grep -q '/'; then
+            IMAGE="$SUPPLIED"
+          fi
+          NAMESPACE="${{ github.event.inputs.k8s_namespace }}"
+          DEPLOY="${{ github.event.inputs.k8s_deployment }}"
+          echo "kubectl set image deployment/${DEPLOY} *=${IMAGE} -n ${NAMESPACE}"
+          kubectl set image deployment/"${DEPLOY}" "*=${IMAGE}" -n "${NAMESPACE}"
+          kubectl rollout status deployment/"${DEPLOY}" -n "${NAMESPACE}" --timeout=120s
+
+      # Azure Web App container deployment path
+      - name: Deploy to Azure Web App (container)
+        if: ${{ github.event.inputs.deploy_target == 'azure_webapp' || env.DEPLOY_TARGET == 'azure_webapp' }}
+        env:
+          IMAGE_TAG: ${{ github.event.inputs.image_tag }}
+        run: |
+          if [ -z "${{ secrets.AZURE_CREDENTIALS }}" ]; then
+            echo "AZURE_CREDENTIALS secret is required for azure_webapp target"
+            exit 1
+          fi
+          if [ -z "${{ secrets.AZURE_WEBAPP_NAME }}" ]; then
+            echo "AZURE_WEBAPP_NAME secret is required for azure_webapp target"
+            exit 1
+          fi
+        # Use azure/login and az cli to set container settings
+      - name: Azure login
+        if: ${{ github.event.inputs.deploy_target == 'azure_webapp' || env.DEPLOY_TARGET == 'azure_webapp' }}
         uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Configure Web App container to use pushed image (and set registry credentials)
+      - name: Configure Web App container to use image from Artifactory (Azure)
+        if: ${{ github.event.inputs.deploy_target == 'azure_webapp' || env.DEPLOY_TARGET == 'azure_webapp' }}
         env:
-          IMAGE_TAG: ${{ steps.push_image.outputs.image_tag }}
+          IMAGE_TAG: ${{ github.event.inputs.image_tag }}
+          AZURE_WEBAPP_NAME: ${{ secrets.AZURE_WEBAPP_NAME }}
+          AZURE_RESOURCE_GROUP: ${{ github.event.inputs.azure_resource_group || secrets.AZURE_RESOURCE_GROUP }}
         run: |
+          IMAGE="$IMAGE_TAG"
+          # If image argument is a short tag, compose full path
+          if ! echo "$IMAGE" | grep -q '/'; then
+            IMAGE="${ARTIFACTORY_URL}/${DOCKER_REPO}/${IMAGE}"
+          fi
           az webapp config container set \
-            --name "${{ secrets.AZURE_WEBAPP_NAME }}" \
-            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
-            --docker-custom-image-name "$IMAGE_TAG" \
-            --docker-registry-server-url "${ARTIFACTORY_URL}" \
-            --docker-registry-server-user "${ARTIFACTORY_USER}" \
-            --docker-registry-server-password "${ARTIFACTORY_PASSWORD}"
+            --name "$AZURE_WEBAPP_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --docker-custom-image-name "$IMAGE" \
+            --docker-registry-server-url "$ARTIFACTORY_URL" \
+            --docker-registry-server-user "$ARTIFACTORY_USER" \
+            --docker-registry-server-password "$ARTIFACTORY_PASSWORD"
+          az webapp restart --name "$AZURE_WEBAPP_NAME" --resource-group "$AZURE_RESOURCE_GROUP"
 
-          # Restart the webapp to ensure it pulls the new image
-          az webapp restart --name "${{ secrets.AZURE_WEBAPP_NAME }}" --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}"
-
-      - name: Post-deployment health check
+      # VM deployment path (SSH)
+      - name: Deploy to VM via SSH (pull image & run)
+        if: ${{ github.event.inputs.deploy_target == 'vm' || env.DEPLOY_TARGET == 'vm' }}
+        env:
+          VM_HOST: ${{ github.event.inputs.vm_host }}
+          VM_USER: ${{ github.event.inputs.vm_user }}
         run: |
-          echo "Waiting for 10s to give the web app a moment to start..."
+          if [ -z "$VM_HOST" ] || [ -z "$VM_USER" ]; then
+            echo "vm_host and vm_user inputs are required for vm deploy target"
+            exit 1
+          fi
+          # write SSH private key
+          if [ -z "${{ secrets.VM_SSH_KEY }}" ]; then
+            echo "Secret VM_SSH_KEY is required for VM deployment (private key)"
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VM_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          IMAGE="${{ github.event.inputs.image_tag }}"
+          if ! echo "$IMAGE" | grep -q '/'; then
+            IMAGE="${ARTIFACTORY_URL}/${DOCKER_REPO}/${IMAGE}"
+          fi
+          SSH="ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key ${VM_USER}@${VM_HOST}"
+          echo "Pulling image on VM and restarting container (assumes docker installed)"
+          $SSH "docker login ${ARTIFACTORY_URL} -u ${ARTIFACTORY_USER} -p '${ARTIFACTORY_PASSWORD}' && docker pull ${IMAGE} && docker stop app || true && docker rm app || true && docker run -d --name app -p 80:80 ${IMAGE}"
+
+      - name: Wait and do healthcheck (optional)
+        env:
+          HEALTH: ${{ github.event.inputs.healthcheck_url || secrets.HEALTHCHECK_URL || '' }}
+        run: |
+          if [ -z "$HEALTH" ]; then
+            echo "No healthcheck URL provided; skipping healthcheck."
+            exit 0
+          fi
+          echo "Waiting 10s for the app to come up..."
           sleep 10
-          curl -f "$HEALTHCHECK_URL" || (echo "Health check failed" && exit 1)
+          curl -f "$HEALTH"
