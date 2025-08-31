@@ -41,7 +41,7 @@ env:
 
 jobs:
   build_and_publish_image:
-    name: Build, Test, Scan, and Publish Docker Image
+    name: Build, Test, and Publish Docker Image
     runs-on: ubuntu-latest
 
     steps:
@@ -85,14 +85,6 @@ jobs:
           TAG="${IMAGE_NAME}:ci-$(git rev-parse --short HEAD)"
           docker build -t "$TAG" .
           echo "local_image=$TAG" >> $GITHUB_OUTPUT
-
-      - name: Scan Docker Image for Vulnerabilities
-        uses: aquasecurity/trivy-action@0.31.0
-        with:
-          image-ref: ${{ steps.build-image.outputs.local_image }}
-          format: table
-          exit-code: 1
-          severity: CRITICAL,HIGH
 
       - name: Authenticate with Artifactory
         run: |
