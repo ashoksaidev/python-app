@@ -63,6 +63,9 @@ jobs:
           PYTHONPATH=src pytest || RC=$?
           [ "$RC" -eq 5 ] && echo "No tests collected." || ([ "$RC" -ne 0 ] && exit $RC)
 
+      - name: Debug Vault Connectivity
+        run: curl -sSf $VAULT_ADDR/v1/sys/health || echo "Vault unreachable"
+
       - name: Retrieve Artifactory Credentials from Vault
         uses: hashicorp/vault-action@v3
         with:
