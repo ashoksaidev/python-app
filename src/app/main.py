@@ -6,6 +6,7 @@ app = FastAPI(
     description="A FastAPI service for managing CI/CD artifact deployment."
 )
 
+
 @app.get("/status")
 def get_service_status():
     return {
