@@ -35,6 +35,6 @@ How CI -> CD works
 
 Notes and recommendations
 - Remove the "Debug: check Vault reachability" step from deploy.yml after verification.
-- For production, consider stricter Trivy exit codes or policy gating.
-- If your self-hosted runner sits inside a private network, ensure it has network access to Vault and Artifactory.
+- Pin actions to specific release tags (we pinned Trivy to 0.31.0 here).
+- Ensure your self-hosted runner (if used) has network access to Vault and Artifactory.
 ```
