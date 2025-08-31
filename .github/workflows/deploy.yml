@@ -31,4 +31,3 @@ jobs:
           echo "Deploying with Artifactory credentials..."
           echo "URL: $ARTIFACTORY_URL"
           echo "User: $ARTIFACTORY_USER"
-          # Here you can add your actual deploy commands (docker login, helm, kubectl, etc.)
