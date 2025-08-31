@@ -1,19 +1,21 @@
-# ------------------------------------------------------------------------------
+# --------------------------------------------------------------------
 # Multi-stage Dockerfile for CI/CD Artifact Deployment Service
-# ------------------------------------------------------------------------------
-# Stage 1: Build environment using Chainguard Python dev image
+# --------------------------------------------------------------------
+
+# Stage 1: Build environment
 FROM cgr.dev/chainguard/python:latest-dev AS build-stage
 
 WORKDIR /app
 
+# Install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Copy app source
 COPY src/ src/
-COPY tests/ tests/
 
-# ------------------------------------------------------------------------------
-# Stage 2: Runtime environment using minimal Chainguard Python image
+# --------------------------------------------------------------------
+# Stage 2: Runtime environment
 FROM cgr.dev/chainguard/python:latest AS runtime-stage
 
 WORKDIR /app
