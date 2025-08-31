@@ -8,6 +8,8 @@ on:
       - 'requirements.txt'
       - 'Dockerfile'
       - '.github/workflows/ci.yml'
+  pull_request:
+    branches: [main]
   workflow_dispatch:
     inputs:
       image_tag:
@@ -53,11 +55,12 @@ jobs:
 
       - name: Install Dependencies
         run: |
+          python -m pip install --upgrade pip
           pip install -r requirements.txt pytest
 
       - name: Run Unit Tests
         run: |
-          pytest || RC=$?
+          PYTHONPATH=src pytest || RC=$?
           [ "$RC" -eq 5 ] && echo "No tests collected." || ([ "$RC" -ne 0 ] && exit $RC)
 
       - name: Retrieve Artifactory Credentials from Vault
