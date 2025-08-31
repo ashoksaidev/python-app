@@ -84,7 +84,7 @@ jobs:
           echo "local_image=$TAG" >> $GITHUB_OUTPUT
 
       - name: Scan Docker Image for Vulnerabilities
-        uses: aquasecurity/trivy-action@0.31.0
+        uses: aquasecurity/trivy-action@0.33.0
         with:
           image-ref: ${{ steps.build-image.outputs.local_image }}
           format: table
