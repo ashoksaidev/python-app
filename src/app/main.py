@@ -1,3 +1,4 @@
+import os
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
@@ -7,6 +8,11 @@ app = FastAPI(
     description="API service for monitoring and managing artifact deployments across environments."
 )
 
+# Load Vault-injected environment variables
+ARTIFACTORY_URL = os.getenv("ARTIFACTORY_URL", "not-configured")
+DOCKER_REPO = os.getenv("DOCKER_REPO", "not-configured")
+ARTIFACTORY_USER = os.getenv("ARTIFACTORY_USER", "not-configured")
+
 @app.get("/health", summary="Health Check Endpoint", response_description="Service health status")
 def health_check():
     return JSONResponse(
@@ -14,6 +20,7 @@ def health_check():
         content={
             "status": "healthy",
             "service": "ci-cd-artifact-deployment",
-            "message": "Deployment service is running successfully"
+            "message": "Deployment service is running successfully",
+            "artifactoryConfigured": ARTIFACTORY_URL != "not-configured"
         }
     )
