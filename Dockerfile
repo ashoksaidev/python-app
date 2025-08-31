@@ -4,31 +4,24 @@
 # Stage 1: Build environment using Chainguard Python dev image
 FROM cgr.dev/chainguard/python:latest-dev AS build-stage
 
-# Set working directory for build
 WORKDIR /app
 
-# Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application source code
 COPY src/ src/
+COPY tests/ tests/
 
 # ------------------------------------------------------------------------------
 # Stage 2: Runtime environment using minimal Chainguard Python image
 FROM cgr.dev/chainguard/python:latest AS runtime-stage
 
-# Set working directory for runtime
 WORKDIR /app
 
-# Copy built app and dependencies from build stage
 COPY --from=build-stage /app /app
 
-# Set Python path to include source directory
 ENV PYTHONPATH=/app/src
 
-# Expose application port
 EXPOSE 8080
 
-# Start FastAPI application using Uvicorn
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
