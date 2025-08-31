@@ -1,5 +1,31 @@
+# Python bytecode and cache
 __pycache__/
-*.pyc
-.git
+*.py[cod]
+
+# Environment files
 .env
+.env.*
+
+# Test directories
 tests/
+tests/__pycache__/
+
+# Git metadata
+.git/
+.gitignore
+
+# Dockerignore itself
+.dockerignore
+
+# Editor and OS-specific files
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.log
+*.egg-info/
+dist/
+build/
