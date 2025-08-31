@@ -1,40 +1,51 @@
-```markdown
-# Artifact Deployment Service - repository layout and CI/CD
+Artifact Deployment Service
 
-This repository contains:
-- src/app/main.py - FastAPI application (status endpoint).
-- tests/test_status.py - functional test using TestClient.
-- Dockerfile - multi-stage Chainguard-based image.
-- .github/workflows/ci.yml - CI: build, test, scan, publish to JFrog Artifactory.
-- .github/workflows/deploy.yml - CD: deploy image from Artifactory to k8s / azure / VM using HashiCorp Vault for secrets.
-- .github/workflows/codeql.yml - CodeQL analysis.
-- .github/dependabot.yml - Dependabot config.
+This project automates deployment of Python services using FastAPI, Docker, GitHub Actions, JFrog Artifactory, and HashiCorp Vault.
 
-Required repository secrets
-- VAULT_ADDR: full URL to Vault (include https:// and port if needed, e.g. https://vault.example.com:8200)
-- VAULT_NAMESPACE: (if using Vault namespaces) or empty string
-- AZURE_CREDENTIALS: service principal JSON (for azure deployment)
-- AZURE_RESOURCE_GROUP: name of resource group (for azure deployment)
-- AZURE_WEBAPP_NAME: name of the Azure Web App (for azure deployment)
-- KUBECONFIG: kubeconfig file content (for kubernetes deployment)
-- VM_SSH_KEY: private key text for VM SSH deploy (for vm deploy target)
-- HEALTHCHECK_URL: optional healthcheck URL (used by deploy workflow)
-- NOTE: The Vault action expects the Vault KV path `ci/data/artifactory` with keys:
-  - url (ARTIFACTORY_URL)
-  - repo_docker (DOCKER_REPO)
-  - username (ARTIFACTORY_USER)
-  - password (ARTIFACTORY_PASSWORD)
+Project Structure
 
-Vault setup
-- Configure OIDC auth for GitHub in Vault and create a role `gh-actions` with the audience `https://github.com/<your-org>`.
-- Store Artifactory credentials at `ci/data/artifactory` (KV v2 recommended).
+- src/app/main.py: FastAPI application  
+- tests/test_status.py: Functional test using TestClient  
+- Dockerfile: Multi-stage build using Chainguard images  
+- .github/workflows/ci.yml: CI workflow to build, test, scan, and publish image  
+- .github/workflows/deploy.yml: CD workflow to deploy image to VM or Azure Web App  
+- .github/workflows/codeql.yml: Static code analysis  
+- .github/dependabot.yml: Dependency updates
 
-How CI -> CD works
-- CI builds and pushes an image to Artifactory and uploads a small artifact file image-tag.txt containing the pushed image tag.
-- Use the value from CI logs or image-tag artifact to trigger the Deploy workflow (workflow_dispatch) and pass `image_tag` as input.
+Required Secrets
 
-Notes and recommendations
-- Remove the "Debug: check Vault reachability" step from deploy.yml after verification.
-- Pin actions to specific release tags (we pinned Trivy to 0.31.0 here).
-- Ensure your self-hosted runner (if used) has network access to Vault and Artifactory.
-```
+Vault must expose the path ci/data/artifactory with these keys:  
+- url → ARTIFACTORY_URL  
+- repo_docker → DOCKER_REPO  
+- username → ARTIFACTORY_USER  
+- password → ARTIFACTORY_PASSWORD
+
+Other required secrets:  
+- VAULT_ADDR  
+- VAULT_NAMESPACE  
+- AZURE_CREDENTIALS  
+- AZURE_RESOURCE_GROUP  
+- AZURE_WEBAPP_NAME  
+- KUBECONFIG (if using Kubernetes)  
+- VM_SSH_KEY  
+- HEALTHCHECK_URL (optional)
+
+Vault Setup
+
+- Enable GitHub OIDC authentication  
+- Create a role named gh-actions with audience https://github.com/your-org  
+- Store credentials under ci/data/artifactory using KV v2
+
+CI/CD Flow
+
+- CI builds and pushes Docker image to Artifactory  
+- Uploads image-tag.txt with the image reference  
+- CD is triggered manually with image_tag input  
+- Deploys to Azure Web App or VM
+
+Recommendations
+
+- Remove Vault debug step from deploy.yml after setup  
+- Pin GitHub Actions to stable versions  
+- Ensure runners have network access to Vault and Artifactory  
+- Use semantic commit messages for clarity
