@@ -3,17 +3,17 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "deploy_utils"
-version = "0.1.0"
-description = "Internal tool for CI/CD artifact publishing"
-requires-python = ">=3.8"
+name = "artifact_deployment_service"
+version = "1.0.0"
+description = "FastAPI-based internal service for managing CI/CD artifact publishing and deployment."
+requires-python = ">=3.10"
 
 [project.dependencies]
 fastapi = "==0.110.0"
-uvicorn = {version = "==0.29.0", extras = ["standard"]}
+uvicorn = { version = "==0.29.0", extras = ["standard"] }
 
 [tool.setuptools]
-package-dir = {"" = "src"}
+package-dir = { "" = "src" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
