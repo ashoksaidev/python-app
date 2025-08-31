@@ -38,7 +38,6 @@ permissions:
 env:
   VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
   VAULT_NAMESPACE: ${{ secrets.VAULT_NAMESPACE }}
-  IMAGE_INPUT: ${{ github.event.inputs.image_tag || '' }}
 
 jobs:
   deploy:
@@ -75,10 +74,10 @@ jobs:
 
       - name: Ensure image tag is provided
         run: |
-          if [ -z "${{ env.IMAGE_INPUT }}" ]; then
+          if [ -z "${{ github.event.inputs.image_tag }}" ]; then
             echo "No image tag provided — supply via workflow_dispatch input 'image_tag'"; exit 1
           fi
-          echo "image_to_deploy=${{ env.IMAGE_INPUT }}" >> $GITHUB_OUTPUT
+          echo "image_to_deploy=${{ github.event.inputs.image_tag }}" >> $GITHUB_OUTPUT
 
       - name: Docker login to JFrog Artifactory
         run: |
@@ -86,9 +85,12 @@ jobs:
 
       - name: Pull image from Artifactory (verify existence)
         run: |
-          IMAGE="${{ env.IMAGE_INPUT }}"
-          if ! echo "$IMAGE" | grep -q '/'; then
-            IMAGE="${ARTIFACTORY_URL}/${DOCKER_REPO}/${IMAGE}"
+          IMAGE_INPUT="${{ github.event.inputs.image_tag }}"
+          # if user supplied a short tag (no slash), assemble full path
+          if ! echo "$IMAGE_INPUT" | grep -q '/'; then
+            IMAGE="${ARTIFACTORY_URL}/${DOCKER_REPO}/${IMAGE_INPUT}"
+          else
+            IMAGE="$IMAGE_INPUT"
           fi
           echo "Attempting to docker pull $IMAGE"
           docker pull "$IMAGE"
@@ -105,9 +107,11 @@ jobs:
           mkdir -p $HOME/.kube
           echo "$KUBECONFIG_CONTENT" > $HOME/.kube/config
           chmod 600 $HOME/.kube/config
-          IMAGE="${{ env.IMAGE_INPUT }}"
-          if ! echo "$IMAGE" | grep -q '/'; then
-            IMAGE="${ARTIFACTORY_URL}/${DOCKER_REPO}/${IMAGE}"
+          IMAGE_INPUT="${{ github.event.inputs.image_tag }}"
+          if ! echo "$IMAGE_INPUT" | grep -q '/'; then
+            IMAGE="${ARTIFACTORY_URL}/${DOCKER_REPO}/${IMAGE_INPUT}"
+          else
+            IMAGE="$IMAGE_INPUT"
           fi
           NAMESPACE="${{ github.event.inputs.k8s_namespace }}"
           DEPLOY="${{ github.event.inputs.k8s_deployment }}"
