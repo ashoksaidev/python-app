@@ -93,6 +93,7 @@ jobs:
           fi
           echo "Attempting to docker pull $IMAGE"
           docker pull "$IMAGE"
+          echo "pulled_image=$IMAGE" >> $GITHUB_OUTPUT
 
       - name: Deploy to Kubernetes - set image
         if: ${{ github.event.inputs.deploy_target == 'kubernetes' }}
