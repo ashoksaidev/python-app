@@ -1,15 +1,19 @@
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 
 app = FastAPI(
-    title="Artifact Deployment Service",
+    title="CI/CD Artifact Deployment API",
     version="1.0.0",
-    description="A FastAPI service for managing CI/CD artifact deployment."
+    description="API service for monitoring and managing artifact deployments across environments."
 )
 
-
-@app.get("/status")
-def get_service_status():
-    return {
-        "status": "ok",
-        "message": "Artifact deployment pipeline is live"
-    }
+@app.get("/health", summary="Health Check Endpoint", response_description="Service health status")
+def health_check():
+    return JSONResponse(
+        status_code=200,
+        content={
+            "status": "healthy",
+            "service": "ci-cd-artifact-deployment",
+            "message": "Deployment service is running successfully"
+        }
+    )
