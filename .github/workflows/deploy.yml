@@ -159,7 +159,7 @@ jobs:
 
       - name: Log In to Azure
         if: ${{ github.event.inputs.deploy_target == 'azure_webapp' }}
-        uses: azure/login@v1
+        uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
