@@ -1,4 +1,4 @@
-name: Deploy Application on to Azure Web App
+name: Deploy Application
 
 on:
   workflow_dispatch:
@@ -52,6 +52,12 @@ jobs:
             ci/data/artifactory repo_docker  | DOCKER_REPO
             ci/data/artifactory username     | ARTIFACTORY_USER
             ci/data/artifactory password     | ARTIFACTORY_PASSWORD
+          kubernetesTokenPath: /var/run/secrets/kubernetes.io/serviceaccount/token
+          exportToken: false
+          outputToken: false
+          tlsSkipVerify: false
+          jwtTtl: 3600
+          ignoreNotFound: false
 
       - name: Validate Image Tag
         run: |
