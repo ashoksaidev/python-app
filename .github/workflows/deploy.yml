@@ -32,10 +32,12 @@ jobs:
   deploy_application:
     name: Deploy Docker Image to VM or Azure Web App
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
+      # ✅ Fixed Vault step (OIDC with JWT, correct path + syntax)
       - name: Retrieve Artifactory Credentials from Vault
         uses: hashicorp/vault-action@v3
         with:
@@ -45,19 +47,20 @@ jobs:
           role: gh-actions
           jwtGithubAudience: https://github.com/ashoksaidev
           exportEnv: true
+          secrets: |
+            ci/data/artifactory url | ARTIFACTORY_URL
+            ci/data/artifactory repo_docker | DOCKER_REPO
+            ci/data/artifactory username | ARTIFACTORY_USER
+            ci/data/artifactory password | ARTIFACTORY_PASSWORD
 
-      - name: Validate Inputs
+      - name: Validate Image Tag
         run: |
           if [ -z "${{ github.event.inputs.image_tag }}" ]; then
-            echo "❌ No image tag provided"
+            echo "No image tag provided — supply via workflow_dispatch input 'image_tag'"
             exit 1
           fi
-          if [ "${{ github.event.inputs.deploy_target }}" == "vm" ]; then
-            if [ -z "${{ github.event.inputs.vm_host }}" ] || [ -z "${{ github.event.inputs.vm_user }}" ]; then
-              echo "❌ VM host/user missing for VM deployment"
-              exit 1
-            fi
-          fi
+          echo "image_to_deploy=${{ github.event.inputs.image_tag }}" >> $GITHUB_OUTPUT
+        shell: bash
 
       - name: Authenticate with Artifactory
         run: echo "$ARTIFACTORY_PASSWORD" | docker login "$ARTIFACTORY_URL" -u "$ARTIFACTORY_USER" --password-stdin
@@ -65,17 +68,17 @@ jobs:
       - name: Pull Docker Image
         run: |
           IMAGE="${{ github.event.inputs.image_tag }}"
-          [[ "$IMAGE" != */* ]] && IMAGE="$ARTIFACTORY_URL/$DOCKER_REPO/$IMAGE"
-          echo "📦 Pulling image: $IMAGE"
+          [[ "$IMAGE" != */* ]] && IMAGE="${ARTIFACTORY_URL}/${DOCKER_REPO}/${IMAGE}"
           docker pull "$IMAGE"
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
 
       - name: Deploy to Virtual Machine via SSH
         if: ${{ github.event.inputs.deploy_target == 'vm' }}
         run: |
+          [[ -z "${{ github.event.inputs.vm_host }}" || -z "${{ github.event.inputs.vm_user }}" ]] && echo "Missing VM host/user" && exit 1
           echo "${{ secrets.VM_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key \
-            "${{ github.event.inputs.vm_user }}@${{ github.event.inputs.vm_host }}" \
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key "${{ github.event.inputs.vm_user }}@${{ github.event.inputs.vm_host }}" \
             "docker login $ARTIFACTORY_URL -u $ARTIFACTORY_USER -p '$ARTIFACTORY_PASSWORD' && \
              docker pull $IMAGE && \
              docker stop app || true && docker rm app || true && \
