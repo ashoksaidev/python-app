@@ -1,10 +1,11 @@
 version: 2
 updates:
   - package-ecosystem: "pip"
-    directory: "/"  # Python dependencies (requirements.txt, pyproject.toml) at project root
+    directory: "/"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    rebase-strategy: auto
     labels:
       - "dependencies"
       - "python"
@@ -13,9 +14,10 @@ updates:
       include: "scope"
 
   - package-ecosystem: "docker"
-    directory: "/"  # Dockerfile located at project root
+    directory: "/"
     schedule:
       interval: "weekly"
+    rebase-strategy: auto
     labels:
       - "dependencies"
       - "docker"
@@ -24,9 +26,10 @@ updates:
       include: "scope"
 
   - package-ecosystem: "github-actions"
-    directory: ".github/workflows"  # GitHub Actions workflows directory
+    directory: ".github/workflows"
     schedule:
-      interval: "weekly"
+      interval: "daily"
+    rebase-strategy: auto
     labels:
       - "dependencies"
       - "ci"
