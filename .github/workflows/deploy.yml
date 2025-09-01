@@ -34,10 +34,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # Step 1: Checkout repo
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      # ✅ Fixed Vault step (OIDC with JWT, correct path + syntax)
+      # Step 2: Retrieve secrets from Vault (OIDC / JWT method)
       - name: Retrieve Artifactory Credentials from Vault
         uses: hashicorp/vault-action@v3
         with:
@@ -53,18 +54,21 @@ jobs:
             ci/data/artifactory username | ARTIFACTORY_USER
             ci/data/artifactory password | ARTIFACTORY_PASSWORD
 
+      # Step 3: Validate image tag
       - name: Validate Image Tag
         run: |
           if [ -z "${{ github.event.inputs.image_tag }}" ]; then
-            echo "No image tag provided — supply via workflow_dispatch input 'image_tag'"
+            echo "❌ No image tag provided — supply via workflow_dispatch input 'image_tag'"
             exit 1
           fi
           echo "image_to_deploy=${{ github.event.inputs.image_tag }}" >> $GITHUB_OUTPUT
         shell: bash
 
+      # Step 4: Authenticate with Artifactory
       - name: Authenticate with Artifactory
         run: echo "$ARTIFACTORY_PASSWORD" | docker login "$ARTIFACTORY_URL" -u "$ARTIFACTORY_USER" --password-stdin
 
+      # Step 5: Pull Docker image
       - name: Pull Docker Image
         run: |
           IMAGE="${{ github.event.inputs.image_tag }}"
@@ -72,10 +76,11 @@ jobs:
           docker pull "$IMAGE"
           echo "IMAGE=$IMAGE" >> $GITHUB_ENV
 
+      # Step 6: Deploy to VM
       - name: Deploy to Virtual Machine via SSH
         if: ${{ github.event.inputs.deploy_target == 'vm' }}
         run: |
-          [[ -z "${{ github.event.inputs.vm_host }}" || -z "${{ github.event.inputs.vm_user }}" ]] && echo "Missing VM host/user" && exit 1
+          [[ -z "${{ github.event.inputs.vm_host }}" || -z "${{ github.event.inputs.vm_user }}" ]] && echo "❌ Missing VM host/user" && exit 1
           echo "${{ secrets.VM_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key "${{ github.event.inputs.vm_user }}@${{ github.event.inputs.vm_host }}" \
@@ -84,12 +89,14 @@ jobs:
              docker stop app || true && docker rm app || true && \
              docker run -d --name app -p 80:80 $IMAGE"
 
+      # Step 7: Log in to Azure
       - name: Log In to Azure
         if: ${{ github.event.inputs.deploy_target == 'azure_webapp' }}
         uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
+      # Step 8: Configure Azure Web App
       - name: Configure Azure Web App to Use Docker Image
         if: ${{ github.event.inputs.deploy_target == 'azure_webapp' }}
         run: |
