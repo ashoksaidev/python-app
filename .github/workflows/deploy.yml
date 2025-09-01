@@ -39,7 +39,7 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      # Step 2: Retrieve Artifactory credentials from Vault (✅ Corrected block)
+      # Step 2: Retrieve Artifactory credentials from Vault (✅ Corrected for ci/data/artifactory)
       - name: Retrieve Artifactory Credentials from Vault
         uses: hashicorp/vault-action@v3
         with:
