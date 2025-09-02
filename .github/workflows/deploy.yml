@@ -48,10 +48,10 @@ jobs:
           jwtGithubAudience: https://github.com/ashoksaidev
           exportEnv: true
           secrets: |
-            ci/data/artifactory url=ARTIFACTORY_URL
-            ci/data/artifactory repo_docker=DOCKER_REPO
-            ci/data/artifactory username=ARTIFACTORY_USER
-            ci/data/artifactory password=ARTIFACTORY_PASSWORD
+            secret/data/ci/artifactory url=ARTIFACTORY_URL
+            secret/data/ci/artifactory repo_docker=DOCKER_REPO
+            secret/data/ci/artifactory username=ARTIFACTORY_USER
+            secret/data/ci/artifactory password=ARTIFACTORY_PASSWORD
 
       # Step 3: Validate image tag
       - name: Validate Image Tag
