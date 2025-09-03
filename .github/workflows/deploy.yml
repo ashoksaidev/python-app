@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: 'Docker image tag (e.g., latest, 1.0.0)'
+        description: 'Docker image tag only (e.g., latest, 1.0.0, sha123)'
         required: true
       deploy_target:
         description: 'Deployment target: vm (Azure VM) | azure_webapp (Azure Web App)'
@@ -37,18 +37,18 @@ jobs:
       # Step 2: Validate image tag
       - name: Validate Image Tag
         run: |
-          if [ -z "${{ github.event.inputs.image_tag }}" ]; then
-            echo "❌ No image tag provided — supply via workflow_dispatch input 'image_tag'"
+          if [[ "${{ github.event.inputs.image_tag }}" == *":"* || "${{ github.event.inputs.image_tag }}" == *"/"* ]]; then
+            echo "❌ ERROR: Provide only a tag (e.g., latest, 1.0.0). Do NOT include image name or registry."
             exit 1
           fi
-          echo "image_to_deploy=${{ github.event.inputs.image_tag }}" >> $GITHUB_OUTPUT
+          echo "✅ Using image tag: ${{ github.event.inputs.image_tag }}"
         shell: bash
 
       # Step 3: Authenticate with Artifactory
       - name: Authenticate with Artifactory
         run: echo "${{ secrets.ARTIFACTORY_PASSWORD }}" | docker login "${{ secrets.ARTIFACTORY_URL }}" -u "${{ secrets.ARTIFACTORY_USER }}" --password-stdin
 
-      # ✅ Step 4: Pull Docker image (fixed)
+      # Step 4: Pull Docker image (✅ corrected to enforce tag only)
       - name: Pull Docker Image
         run: |
           IMAGE="${{ secrets.ARTIFACTORY_URL }}/${{ secrets.DOCKER_REPO }}/my-app:${{ github.event.inputs.image_tag }}"
