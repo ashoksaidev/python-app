@@ -34,23 +34,7 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      # Step 2: Retrieve Artifactory credentials from Vault (✅ fixed path for KV v2)
-      - name: Retrieve Artifactory Credentials from Vault
-        uses: hashicorp/vault-action@v3
-        with:
-          url: ${{ secrets.VAULT_ADDR }}
-          method: jwt
-          path: jwt
-          role: gh-actions
-          jwtGithubAudience: https://github.com/ashoksaidev
-          exportEnv: true
-          secrets: |
-            ci/artifactory url | ARTIFACTORY_URL
-            ci/artifactory repo_docker | DOCKER_REPO
-            ci/artifactory username | ARTIFACTORY_USER
-            ci/artifactory password | ARTIFACTORY_PASSWORD
-
-      # Step 3: Validate image tag (must be full path)
+      # Step 2: Validate image tag (must be full path)
       - name: Validate Image Tag
         run: |
           if [ -z "${{ github.event.inputs.image_tag }}" ]; then
@@ -60,17 +44,17 @@ jobs:
           echo "IMAGE=${{ github.event.inputs.image_tag }}" >> $GITHUB_ENV
         shell: bash
 
-      # Step 4: Authenticate with Artifactory
+      # Step 3: Authenticate with Artifactory
       - name: Authenticate with Artifactory
-        run: echo "$ARTIFACTORY_PASSWORD" | docker login "$ARTIFACTORY_URL" -u "$ARTIFACTORY_USER" --password-stdin
+        run: echo "${{ secrets.ARTIFACTORY_PASSWORD }}" | docker login "${{ secrets.ARTIFACTORY_URL }}" -u "${{ secrets.ARTIFACTORY_USER }}" --password-stdin
 
-      # Step 5: Pull Docker image
+      # Step 4: Pull Docker image
       - name: Pull Docker Image
         run: |
           echo "Pulling image: $IMAGE"
           docker pull "$IMAGE"
 
-      # Step 6: Deploy to VM (if target is VM)
+      # Step 5: Deploy to VM (if target is VM)
       - name: Deploy to Virtual Machine via SSH
         if: ${{ github.event.inputs.deploy_target == 'vm' }}
         run: |
@@ -78,19 +62,19 @@ jobs:
           echo "${{ secrets.VM_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key "${{ github.event.inputs.vm_user }}@${{ github.event.inputs.vm_host }}" \
-            "docker login $ARTIFACTORY_URL -u $ARTIFACTORY_USER -p '$ARTIFACTORY_PASSWORD' && \
+            "docker login ${{ secrets.ARTIFACTORY_URL }} -u ${{ secrets.ARTIFACTORY_USER }} -p '${{ secrets.ARTIFACTORY_PASSWORD }}' && \
              docker pull $IMAGE && \
              docker stop app || true && docker rm app || true && \
              docker run -d --name app -p 80:80 $IMAGE"
 
-      # Step 7: Log in to Azure (if target is Web App)
+      # Step 6: Log in to Azure (if target is Web App)
       - name: Log In to Azure
         if: ${{ github.event.inputs.deploy_target == 'azure_webapp' }}
         uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      # Step 8: Configure Azure Web App
+      # Step 7: Configure Azure Web App
       - name: Configure Azure Web App to Use Docker Image
         if: ${{ github.event.inputs.deploy_target == 'azure_webapp' }}
         run: |
@@ -98,9 +82,9 @@ jobs:
             --name "${{ secrets.AZURE_WEBAPP_NAME }}" \
             --resource-group "${{ github.event.inputs.azure_resource_group || secrets.AZURE_RESOURCE_GROUP }}" \
             --docker-custom-image-name "$IMAGE" \
-            --docker-registry-server-url "$ARTIFACTORY_URL" \
-            --docker-registry-server-user "$ARTIFACTORY_USER" \
-            --docker-registry-server-password "$ARTIFACTORY_PASSWORD"
+            --docker-registry-server-url "${{ secrets.ARTIFACTORY_URL }}" \
+            --docker-registry-server-user "${{ secrets.ARTIFACTORY_USER }}" \
+            --docker-registry-server-password "${{ secrets.ARTIFACTORY_PASSWORD }}"
           az webapp restart \
             --name "${{ secrets.AZURE_WEBAPP_NAME }}" \
             --resource-group "${{ github.event.inputs.azure_resource_group || secrets.AZURE_RESOURCE_GROUP }}"
