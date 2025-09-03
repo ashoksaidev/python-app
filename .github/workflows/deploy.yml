@@ -4,24 +4,23 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: 'Docker image tag only (e.g., latest, 1.0.0, sha123)'
+        description: 'Full Docker image tag to deploy'
         required: true
       deploy_target:
-        description: 'Deployment target: vm (Azure VM) | azure_webapp (Azure Web App)'
+        description: 'Deployment target: vm | azure_webapp'
         required: true
         default: 'vm'
       vm_host:
-        description: 'Azure VM hostname or public IP address'
+        description: 'VM hostname or IP address'
         required: false
       vm_user:
-        description: 'Azure VM SSH username (e.g., azureuser)'
+        description: 'VM SSH username'
         required: false
       azure_resource_group:
-        description: 'Azure Resource Group where the Web App is hosted'
+        description: 'Azure resource group name'
         required: false
 
 permissions:
-  id-token: write
   contents: read
 
 jobs:
@@ -37,56 +36,19 @@ jobs:
       # Step 2: Validate image tag
       - name: Validate Image Tag
         run: |
-          if [[ "${{ github.event.inputs.image_tag }}" == *":"* || "${{ github.event.inputs.image_tag }}" == *"/"* ]]; then
-            echo "❌ ERROR: Provide only a tag (e.g., latest, 1.0.0). Do NOT include image name or registry."
+          if [ -z "${{ github.event.inputs.image_tag }}" ]; then
+            echo "❌ No image tag provided — supply via workflow_dispatch input 'image_tag'"
             exit 1
           fi
-          echo "✅ Using image tag: ${{ github.event.inputs.image_tag }}"
+          echo "image_to_deploy=${{ github.event.inputs.image_tag }}" >> $GITHUB_OUTPUT
         shell: bash
 
-      # Step 3: Authenticate with Artifactory
+      # Step 3: Authenticate with Artifactory (fixed registry URL)
       - name: Authenticate with Artifactory
-        run: echo "${{ secrets.ARTIFACTORY_PASSWORD }}" | docker login "${{ secrets.ARTIFACTORY_URL }}" -u "${{ secrets.ARTIFACTORY_USER }}" --password-stdin
+        run: echo "${{ secrets.ARTIFACTORY_PASSWORD }}" | docker login "trialbgccpz.jfrog.io" -u "${{ secrets.ARTIFACTORY_USER }}" --password-stdin
 
-      # Step 4: Pull Docker image (✅ corrected to enforce tag only)
+      # Step 4: Pull Docker image
       - name: Pull Docker Image
         run: |
-          IMAGE="${{ secrets.ARTIFACTORY_URL }}/${{ secrets.DOCKER_REPO }}/my-app:${{ github.event.inputs.image_tag }}"
-          echo "Pulling image: $IMAGE"
-          docker pull "$IMAGE"
-          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
-
-      # Step 5: Deploy to VM
-      - name: Deploy to Virtual Machine via SSH
-        if: ${{ github.event.inputs.deploy_target == 'vm' }}
-        run: |
-          [[ -z "${{ github.event.inputs.vm_host }}" || -z "${{ github.event.inputs.vm_user }}" ]] && echo "❌ Missing VM host/user" && exit 1
-          echo "${{ secrets.VM_SSH_KEY }}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key "${{ github.event.inputs.vm_user }}@${{ github.event.inputs.vm_host }}" \
-            "docker login $ARTIFACTORY_URL -u $ARTIFACTORY_USER -p '$ARTIFACTORY_PASSWORD' && \
-             docker pull $IMAGE && \
-             docker stop app || true && docker rm app || true && \
-             docker run -d --name app -p 80:80 $IMAGE"
-
-      # Step 6: Log in to Azure
-      - name: Log In to Azure
-        if: ${{ github.event.inputs.deploy_target == 'azure_webapp' }}
-        uses: azure/login@v1
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
-
-      # Step 7: Configure Azure Web App
-      - name: Configure Azure Web App to Use Docker Image
-        if: ${{ github.event.inputs.deploy_target == 'azure_webapp' }}
-        run: |
-          az webapp config container set \
-            --name "${{ secrets.AZURE_WEBAPP_NAME }}" \
-            --resource-group "${{ github.event.inputs.azure_resource_group || secrets.AZURE_RESOURCE_GROUP }}" \
-            --docker-custom-image-name "$IMAGE" \
-            --docker-registry-server-url "$ARTIFACTORY_URL" \
-            --docker-registry-server-user "$ARTIFACTORY_USER" \
-            --docker-registry-server-password "$ARTIFACTORY_PASSWORD"
-          az webapp restart \
-            --name "${{ secrets.AZURE_WEBAPP_NAME }}" \
-            --resource-group "${{ github.event.inputs.azure_resource_group || secrets.AZURE_RESOURCE_GROUP }}"
+          IMAGE="${{ github.event.inputs.image_tag }}"
+          [[ "$IMAGE" != */* ]] && IMAGE="trialbgccpz.jfrog.io/${{ secrets.DOCKER_REPO }}/$IMAGE"
