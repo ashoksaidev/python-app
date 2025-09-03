@@ -50,14 +50,14 @@ jobs:
             ci/data/artifactory username | ARTIFACTORY_USER
             ci/data/artifactory password | ARTIFACTORY_PASSWORD
 
-      # Step 3: Validate image tag
+      # Step 3: Validate image tag (must be full path)
       - name: Validate Image Tag
         run: |
           if [ -z "${{ github.event.inputs.image_tag }}" ]; then
             echo "❌ No image tag provided — supply via workflow_dispatch input 'image_tag'"
             exit 1
           fi
-          echo "image_to_deploy=${{ github.event.inputs.image_tag }}" >> $GITHUB_OUTPUT
+          echo "IMAGE=${{ github.event.inputs.image_tag }}" >> $GITHUB_ENV
         shell: bash
 
       # Step 4: Authenticate with Artifactory
@@ -67,12 +67,10 @@ jobs:
       # Step 5: Pull Docker image
       - name: Pull Docker Image
         run: |
-          IMAGE="${{ github.event.inputs.image_tag }}"
-          [[ "$IMAGE" != */* ]] && IMAGE="${ARTIFACTORY_URL}/${DOCKER_REPO}/${IMAGE}"
+          echo "Pulling image: $IMAGE"
           docker pull "$IMAGE"
-          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
 
-      # Step 6: Deploy to VM
+      # Step 6: Deploy to VM (if target is VM)
       - name: Deploy to Virtual Machine via SSH
         if: ${{ github.event.inputs.deploy_target == 'vm' }}
         run: |
@@ -85,7 +83,7 @@ jobs:
              docker stop app || true && docker rm app || true && \
              docker run -d --name app -p 80:80 $IMAGE"
 
-      # Step 7: Log in to Azure
+      # Step 7: Log in to Azure (if target is Web App)
       - name: Log In to Azure
         if: ${{ github.event.inputs.deploy_target == 'azure_webapp' }}
         uses: azure/login@v1
