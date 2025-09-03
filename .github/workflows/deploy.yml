@@ -4,20 +4,20 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: 'Full Docker image tag to deploy'
+        description: 'Docker image path from JFrog (registry/repo/image:tag)'
         required: true
       deploy_target:
-        description: 'Deployment target: vm | azure_webapp'
+        description: 'Deployment target: vm (Azure VM) | azure_webapp (Azure Web App)'
         required: true
         default: 'vm'
       vm_host:
-        description: 'VM hostname or IP address'
+        description: 'Azure VM hostname or public IP address'
         required: false
       vm_user:
-        description: 'VM SSH username'
+        description: 'Azure VM SSH username (e.g., azureuser)'
         required: false
       azure_resource_group:
-        description: 'Azure resource group name'
+        description: 'Azure Resource Group where the Web App is hosted'
         required: false
 
 permissions:
@@ -68,7 +68,49 @@ jobs:
       - name: Authenticate with Artifactory
         run: echo "$ARTIFACTORY_PASSWORD" | docker login trialbgccpz.jfrog.io -u "$ARTIFACTORY_USER" --password-stdin
 
-      # ✅ Step 5: Build Docker Image
+      # Step 5: Build Docker Image
       - name: Build Docker Image
         run: |
-          if [ -z "$ARTIFACTORY_URL" ] || [ -z "$DOCKER_REPO"_]()_]()
+          if [ -z "$ARTIFACTORY_URL" ] || [ -z "$DOCKER_REPO" ]; then
+            echo "❌ ARTIFACTORY_URL or DOCKER_REPO is missing!"
+            exit 1
+          fi
+          IMAGE="$ARTIFACTORY_URL/$DOCKER_REPO/myapp:${GITHUB_SHA}"
+          echo "Building image: $IMAGE"
+          docker build -t "$IMAGE" .
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+
+      # Step 6: Deploy to VM
+      - name: Deploy to Virtual Machine via SSH
+        if: ${{ github.event.inputs.deploy_target == 'vm' }}
+        run: |
+          [[ -z "${{ github.event.inputs.vm_host }}" || -z "${{ github.event.inputs.vm_user }}" ]] && echo "❌ Missing VM host/user" && exit 1
+          echo "${{ secrets.VM_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key "${{ github.event.inputs.vm_user }}@${{ github.event.inputs.vm_host }}" \
+            "docker login trialbgccpz.jfrog.io -u $ARTIFACTORY_USER -p '$ARTIFACTORY_PASSWORD' && \
+             docker pull $IMAGE && \
+             docker stop app || true && docker rm app || true && \
+             docker run -d --name app -p 80:80 $IMAGE"
+
+      # Step 7: Log in to Azure
+      - name: Log In to Azure
+        if: ${{ github.event.inputs.deploy_target == 'azure_webapp' }}
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      # Step 8: Configure Azure Web App
+      - name: Configure Azure Web App to Use Docker Image
+        if: ${{ github.event.inputs.deploy_target == 'azure_webapp' }}
+        run: |
+          az webapp config container set \
+            --name "${{ secrets.AZURE_WEBAPP_NAME }}" \
+            --resource-group "${{ github.event.inputs.azure_resource_group || secrets.AZURE_RESOURCE_GROUP }}" \
+            --docker-custom-image-name "$IMAGE" \
+            --docker-registry-server-url "https://trialbgccpz.jfrog.io" \
+            --docker-registry-server-user "$ARTIFACTORY_USER" \
+            --docker-registry-server-password "$ARTIFACTORY_PASSWORD"
+          az webapp restart \
+            --name "${{ secrets.AZURE_WEBAPP_NAME }}" \
+            --resource-group "${{ github.event.inputs.azure_resource_group || secrets.AZURE_RESOURCE_GROUP }}"
