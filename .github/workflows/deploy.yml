@@ -19,7 +19,17 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      # Step 2: Retrieve Artifactory credentials from Vault
+      # Step 2: Install Vault CLI (needed to interact with Vault if required later)
+      - name: Install Vault CLI
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y unzip curl
+          curl -fsSL https://releases.hashicorp.com/vault/1.20.2/vault_1.20.2_linux_amd64.zip -o vault.zip
+          unzip vault.zip
+          sudo mv vault /usr/local/bin/
+          vault --version
+
+      # Step 3: Retrieve Artifactory credentials from Vault
       - name: Retrieve Artifactory Credentials from Vault
         uses: hashicorp/vault-action@v3
         with:
@@ -35,12 +45,12 @@ jobs:
             ci/artifactory username | ARTIFACTORY_USER
             ci/artifactory password | ARTIFACTORY_PASSWORD
 
-      # Step 3: Docker login to JFrog
+      # Step 4: Docker login to JFrog
       - name: Docker Login to JFrog
         run: |
           echo "$ARTIFACTORY_PASSWORD" | docker login "$ARTIFACTORY_URL" -u "$ARTIFACTORY_USER" --password-stdin
 
-      # Step 4: Build FastAPI Docker Image
+      # Step 5: Build FastAPI Docker Image
       - name: Build Docker Image
         run: |
           IMAGE="$ARTIFACTORY_URL/$DOCKER_REPO/fastapi-app:${GITHUB_SHA}"
@@ -48,11 +58,11 @@ jobs:
           docker build -t "$IMAGE" .
           echo "IMAGE=$IMAGE" >> $GITHUB_ENV
 
-      # Step 5: Push Docker image to JFrog
+      # Step 6: Push Docker image to JFrog
       - name: Push Docker Image to JFrog
         run: docker push $IMAGE
 
-      # Step 6: Deploy to Azure VM
+      # Step 7: Deploy to Azure VM
       - name: Deploy to Azure VM
         if: always()
         run: |
@@ -65,7 +75,7 @@ jobs:
              docker stop fastapi-app || true && docker rm fastapi-app || true && \
              docker run -d --name fastapi-app -p 80:80 $IMAGE"
 
-      # Step 7: Deploy to Azure Web App
+      # Step 8: Deploy to Azure Web App
       - name: Log In to Azure
         uses: azure/login@v1
         with:
