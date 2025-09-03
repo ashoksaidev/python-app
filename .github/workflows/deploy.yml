@@ -1,24 +1,9 @@
 name: Deploy FastAPI Application
 
 on:
-  workflow_dispatch:
-    inputs:
-      image_tag:
-        description: 'Full Docker image tag of FastAPI app (built with Chainguard base images, stored in JFrog SaaS)'
-        required: true
-      deploy_target:
-        description: 'Choose where to deploy: vm (Azure VM) | azure_webapp (Azure Web App)'
-        required: true
-        default: 'vm'
-      vm_host:
-        description: 'Public IP address of the Azure VM'
-        required: false
-      vm_user:
-        description: 'SSH username for the Azure VM (e.g., azureuser)'
-        required: false
-      azure_resource_group:
-        description: 'Azure Resource Group name (needed only for Web App deploy)'
-        required: false
+  push:
+    branches:
+      - main   # 🚀 Auto deploy whenever code is pushed to main branch
 
 permissions:
   id-token: write
@@ -26,16 +11,16 @@ permissions:
 
 jobs:
   deploy_application:
-    name: Build and Deploy FastAPI App
+    name: Deploy Docker Image to VM or Azure Web App
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1. Checkout repository code
-      - name: Checkout Repository
+      # Step 1: Checkout repo
+      - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      # Step 2. Pull JFrog credentials securely from Vault (via GitHub OIDC)
-      - name: Get JFrog Credentials from Vault
+      # Step 2: Retrieve Artifactory credentials from Vault
+      - name: Retrieve Artifactory Credentials from Vault
         uses: hashicorp/vault-action@v3
         with:
           url: ${{ secrets.VAULT_ADDR }}
@@ -50,67 +35,51 @@ jobs:
             ci/artifactory username | ARTIFACTORY_USER
             ci/artifactory password | ARTIFACTORY_PASSWORD
 
-      # Step 3. Authenticate Docker with JFrog
-      - name: Docker Login
+      # Step 3: Docker login to JFrog
+      - name: Docker Login to JFrog
         run: |
           echo "$ARTIFACTORY_PASSWORD" | docker login "$ARTIFACTORY_URL" -u "$ARTIFACTORY_USER" --password-stdin
 
-      # Step 4. Verify the image tag input
-      - name: Validate Image Tag
-        run: |
-          if [ -z "${{ github.event.inputs.image_tag }}" ]; then
-            echo "❌ No image tag provided — please provide one in workflow_dispatch input"
-            exit 1
-          fi
-          echo "image_to_deploy=${{ github.event.inputs.image_tag }}" >> $GITHUB_OUTPUT
-        shell: bash
-
-      # Step 5. Build Docker image for FastAPI
+      # Step 4: Build FastAPI Docker Image
       - name: Build Docker Image
         run: |
-          if [ -z "$ARTIFACTORY_URL" ] || [ -z "$DOCKER_REPO" ]; then
-            echo "❌ Missing JFrog Artifactory URL or Docker repo"
-            exit 1
-          fi
           IMAGE="$ARTIFACTORY_URL/$DOCKER_REPO/fastapi-app:${GITHUB_SHA}"
-          echo "Building Docker image: $IMAGE"
+          echo "Building image: $IMAGE"
           docker build -t "$IMAGE" .
           echo "IMAGE=$IMAGE" >> $GITHUB_ENV
 
-      # Step 6. Push the Docker image to JFrog
-      - name: Push Docker Image
+      # Step 5: Push Docker image to JFrog
+      - name: Push Docker Image to JFrog
         run: docker push $IMAGE
 
-      # Step 7. Deploy to Azure VM (if selected)
+      # Step 6: Deploy to Azure VM
       - name: Deploy to Azure VM
-        if: ${{ github.event.inputs.deploy_target == 'vm' }}
+        if: always()
         run: |
-          [[ -z "${{ github.event.inputs.vm_host }}" || -z "${{ github.event.inputs.vm_user }}" ]] && echo "❌ VM host or username not provided" && exit 1
+          [[ -z "${{ secrets.VM_HOST }}" || -z "${{ secrets.VM_USER }}" ]] && echo "❌ Missing VM host/user" && exit 1
           echo "${{ secrets.VM_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key "${{ github.event.inputs.vm_user }}@${{ github.event.inputs.vm_host }}" \
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key "${{ secrets.VM_USER }}@${{ secrets.VM_HOST }}" \
             "docker login $ARTIFACTORY_URL -u $ARTIFACTORY_USER -p '$ARTIFACTORY_PASSWORD' && \
              docker pull $IMAGE && \
              docker stop fastapi-app || true && docker rm fastapi-app || true && \
              docker run -d --name fastapi-app -p 80:80 $IMAGE"
 
-      # Step 8. Deploy to Azure Web App (if selected)
-      - name: Azure Login
-        if: ${{ github.event.inputs.deploy_target == 'azure_webapp' }}
+      # Step 7: Deploy to Azure Web App
+      - name: Log In to Azure
         uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Deploy to Azure Web App
-        if: ${{ github.event.inputs.deploy_target == 'azure_webapp' }}
+      - name: Configure Azure Web App
         run: |
           az webapp config container set \
             --name "${{ secrets.AZURE_WEBAPP_NAME }}" \
-            --resource-group "${{ github.event.inputs.azure_resource_group || secrets.AZURE_RESOURCE_GROUP }}" \
+            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
             --docker-custom-image-name "$IMAGE" \
             --docker-registry-server-url "https://$ARTIFACTORY_URL" \
             --docker-registry-server-user "$ARTIFACTORY_USER" \
             --docker-registry-server-password "$ARTIFACTORY_PASSWORD"
           az webapp restart \
             --name "${{ secrets.AZURE_WEBAPP_NAME }}" \
-            --resource-group "${{ github.event.inputs.azure_resource_group || secrets.AZURE_RESOURCE_GROUP }}"
+            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}"
