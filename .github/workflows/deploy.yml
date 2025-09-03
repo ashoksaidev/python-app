@@ -48,11 +48,17 @@ jobs:
       - name: Authenticate with Artifactory
         run: echo "${{ secrets.ARTIFACTORY_PASSWORD }}" | docker login "${{ secrets.ARTIFACTORY_URL }}" -u "${{ secrets.ARTIFACTORY_USER }}" --password-stdin
 
-      # Step 4: Pull Docker image
+      # Step 4: Pull Docker image (✅ updated block)
       - name: Pull Docker Image
         run: |
+          if [[ "${{ github.event.inputs.image_tag }}" == */* ]]; then
+            IMAGE="${{ github.event.inputs.image_tag }}"
+          else
+            IMAGE="${{ secrets.ARTIFACTORY_URL }}/${{ secrets.DOCKER_REPO }}/${{ github.event.inputs.image_tag }}"
+          fi
           echo "Pulling image: $IMAGE"
           docker pull "$IMAGE"
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
 
       # Step 5: Deploy to VM (if target is VM)
       - name: Deploy to Virtual Machine via SSH
