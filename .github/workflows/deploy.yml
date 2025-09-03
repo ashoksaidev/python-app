@@ -29,7 +29,7 @@ jobs:
           sudo mv vault /usr/local/bin/
           vault --version
 
-      # Step 3: Retrieve Artifactory credentials from Vault
+      # Step 3: Retrieve Artifactory credentials from Vault (✅ fixed path)
       - name: Retrieve Artifactory Credentials from Vault
         uses: hashicorp/vault-action@v3
         with:
@@ -40,10 +40,10 @@ jobs:
           jwtGithubAudience: https://github.com/ashoksaidev
           exportEnv: true
           secrets: |
-            ci/artifactory url | ARTIFACTORY_URL
-            ci/artifactory repo_docker | DOCKER_REPO
-            ci/artifactory username | ARTIFACTORY_USER
-            ci/artifactory password | ARTIFACTORY_PASSWORD
+            ci/data/artifactory url | ARTIFACTORY_URL
+            ci/data/artifactory repo_docker | DOCKER_REPO
+            ci/data/artifactory username | ARTIFACTORY_USER
+            ci/data/artifactory password | ARTIFACTORY_PASSWORD
 
       # Step 4: Docker login to JFrog
       - name: Docker Login to JFrog
