@@ -5,173 +5,103 @@ on:
     branches: [ main ]
 
 permissions:
-  id-token: write     # for Vault OIDC
+  id-token: write
   contents: read
 
 jobs:
-  deploy_application:
-    name: Deploy Docker Image to VM or Azure Web App
+  deploy:
     runs-on: ubuntu-latest
+    name: Build and Deploy FastAPI App
 
     steps:
-      - name: Checkout Source Code
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install jq
+      - name: Install jq & curl
+        run: sudo apt-get update -y && sudo apt-get install -y jq curl
+
+      - name: Load from GitHub Secrets (overrides)
         run: |
-          sudo apt-get update -y
-          sudo apt-get install -y jq
-      # --- LAYER 1: GitHub Secrets overrides (safe version) ---
-      - name: Load Artifactory from GitHub Secrets (override layer)
-        env:
-          ARTIFACTORY_URL_SEC: ${{ secrets.ARTIFACTORY_URL }}
-          ARTIFACTORY_USERNAME_SEC: ${{ secrets.ARTIFACTORY_USERNAME }}
-          ARTIFACTORY_PASSWORD_SEC: ${{ secrets.ARTIFACTORY_PASSWORD }}
-          DOCKER_REPO_SEC: ${{ secrets.DOCKER_REPO }}
-        run: |
-          set -euo pipefail
-          if [ -n "${ARTIFACTORY_URL_SEC:-}" ]; then
-            echo "ARTIFACTORY_URL=$ARTIFACTORY_URL_SEC" >> "$GITHUB_ENV"
+          [ -n "${{ secrets.ARTIFACTORY_URL }}" ] && echo "ARTIFACTORY_URL=${{ secrets.ARTIFACTORY_URL }}" >> $GITHUB_ENV
+          [ -n "${{ secrets.ARTIFACTORY_USERNAME }}" ] && echo "ARTIFACTORY_USERNAME=${{ secrets.ARTIFACTORY_USERNAME }}" >> $GITHUB_ENV
+          if [ -n "${{ secrets.ARTIFACTORY_PASSWORD }}" ]; then
+            echo "::add-mask::${{ secrets.ARTIFACTORY_PASSWORD }}"; echo "ARTIFACTORY_PASSWORD=${{ secrets.ARTIFACTORY_PASSWORD }}" >> $GITHUB_ENV
           fi
-          if [ -n "${ARTIFACTORY_USERNAME_SEC:-}" ]; then
-            echo "ARTIFACTORY_USERNAME=$ARTIFACTORY_USERNAME_SEC" >> "$GITHUB_ENV"
-          fi
-          if [ -n "${ARTIFACTORY_PASSWORD_SEC:-}" ]; then
-            echo "::add-mask::$ARTIFACTORY_PASSWORD_SEC"
-            echo "ARTIFACTORY_PASSWORD=$ARTIFACTORY_PASSWORD_SEC" >> "$GITHUB_ENV"
-          fi
-          if [ -n "${DOCKER_REPO_SEC:-}" ]; then
-            echo "DOCKER_REPO=$DOCKER_REPO_SEC" >> "$GITHUB_ENV"
-          fi
-      # --- LAYER 2: Vault OIDC ---
+          [ -n "${{ secrets.DOCKER_REPO }}" ] && echo "DOCKER_REPO=${{ secrets.DOCKER_REPO }}" >> $GITHUB_ENV
+
       - name: Authenticate to Vault (OIDC)
         uses: hashicorp/vault-action@v3
         with:
-          url: ${{ secrets.VAULT_ADDR }}   # e.g., https://vault.example.com:8200
+          url: ${{ secrets.VAULT_ADDR }}
           method: jwt
           path: jwt
           role: gh-actions
           jwtGithubAudience: https://github.com/ashoksaidev
           exportToken: true
 
-      # --- LAYER 3: Vault fallback ---
-      - name: Load Artifactory from Vault (fallback layer)
+      - name: Load from Vault (fallback)
         env:
           VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
           VAULT_NAMESPACE: ${{ secrets.VAULT_NAMESPACE }}
-          VAULT_KV_MOUNT: ${{ vars.VAULT_KV_MOUNT || 'ci' }}
-          VAULT_SECRET_PATH: ${{ vars.VAULT_SECRET_PATH || 'artifactory' }}
         run: |
-          set -euo pipefail
-          API="$VAULT_ADDR/v1/$VAULT_KV_MOUNT/data/$VAULT_SECRET_PATH"
-          curl -sS \
-            -H "X-Vault-Token: $VAULT_TOKEN" \
-            -H "X-Vault-Namespace: ${VAULT_NAMESPACE:-}" \
-            "$API" > secret.json
-          set_if_empty () {
-            local KEY="$1" JSON_PATH="$2" MASK="${3:-no}"
-            if [ -z "${!KEY:-}" ]; then
-              VAL=$(jq -r "$JSON_PATH // empty" secret.json)
-              if [ -n "$VAL" ]; then
-                [ "$MASK" = "yes" ] && echo "::add-mask::$VAL"
-                echo "$KEY=$VAL" >> "$GITHUB_ENV"
-              fi
-            fi
-          }
-          set_if_empty ARTIFACTORY_URL      '.data.data.url'
-          set_if_empty ARTIFACTORY_USERNAME '.data.data.username'
-          set_if_empty ARTIFACTORY_PASSWORD '.data.data.password' yes
-          set_if_empty DOCKER_REPO          '.data.data.repo_docker'
-      - name: Validate required variables
+          API="$VAULT_ADDR/v1/ci/data/artifactory"
+          curl -sS -H "X-Vault-Token: $VAULT_TOKEN" -H "X-Vault-Namespace: ${VAULT_NAMESPACE:-}" "$API" > secret.json
+          [ -z "$ARTIFACTORY_URL" ]      && echo "ARTIFACTORY_URL=$(jq -r '.data.data.url' secret.json)" >> $GITHUB_ENV
+          [ -z "$ARTIFACTORY_USERNAME" ] && echo "ARTIFACTORY_USERNAME=$(jq -r '.data.data.username' secret.json)" >> $GITHUB_ENV
+          if [ -z "$ARTIFACTORY_PASSWORD" ]; then PW=$(jq -r '.data.data.password' secret.json); echo "::add-mask::$PW"; echo "ARTIFACTORY_PASSWORD=$PW" >> $GITHUB_ENV; fi
+          [ -z "$DOCKER_REPO" ]          && echo "DOCKER_REPO=$(jq -r '.data.data.repo_docker' secret.json)" >> $GITHUB_ENV
+
+      - name: Verify config & auth
         run: |
-          set -e
-          missing=0
           for v in ARTIFACTORY_URL ARTIFACTORY_USERNAME ARTIFACTORY_PASSWORD DOCKER_REPO; do
-            if [ -z "${!v:-}" ]; then
-              echo "❌ Missing required variable: $v"
-              missing=1
-            fi
+            [ -z "${!v:-}" ] && { echo "Missing $v"; exit 1; }
           done
-          if [ $missing -ne 0 ]; then exit 1; fi
-          echo "✅ Required variables present"
-      - name: Normalize registry & validate credentials
-        run: |
-          set -euo pipefail
-          RAW="$ARTIFACTORY_URL"
-          REGISTRY_HOST="${RAW#http://}"; REGISTRY_HOST="${REGISTRY_HOST#https://}"
-          REGISTRY_HOST="${REGISTRY_HOST%%/*}"
-          echo "REGISTRY_HOST=$REGISTRY_HOST" >> "$GITHUB_ENV"
-          # Prefer Bearer (Scoped Token). Fallback to basic if needed.
+          RAW="$ARTIFACTORY_URL"; HOST="${RAW#http://}"; HOST="${HOST#https://}"; HOST="${HOST%%/*}"
+          echo "REGISTRY_HOST=$HOST" >> $GITHUB_ENV
           set +e
-          PING_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "Authorization: Bearer $ARTIFACTORY_PASSWORD" \
-            "https://$REGISTRY_HOST/artifactory/api/system/ping")
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $ARTIFACTORY_PASSWORD" "https://$HOST/artifactory/api/system/ping")
+          [ "$CODE" != "200" ] && CODE=$(curl -s -o /dev/null -w "%{http_code}" -u "$ARTIFACTORY_USERNAME:$ARTIFACTORY_PASSWORD" "https://$HOST/artifactory/api/system/ping")
           set -e
-          if [ "$PING_CODE" != "200" ]; then
-            echo "⚠️ Bearer ping failed ($PING_CODE). Trying basic auth…"
-            set +e
-            PING_CODE_BASIC=$(curl -s -o /dev/null -w "%{http_code}" \
-              -u "$ARTIFACTORY_USERNAME:$ARTIFACTORY_PASSWORD" \
-              "https://$REGISTRY_HOST/artifactory/api/system/ping")
-            set -e
-            if [ "$PING_CODE_BASIC" != "200" ]; then
-              echo "❌ Artifactory auth failed. Ensure password is a Scoped Token for '$ARTIFACTORY_USERNAME', and URL is host-only."
-              exit 1
-            fi
-          fi
-          echo "✅ Artifactory auth OK"
-      - name: Docker Login to JFrog
+          [ "$CODE" = "200" ] || { echo "Artifactory auth failed"; exit 1; }
+
+      - name: Docker login, build, push
         run: |
           echo "$ARTIFACTORY_PASSWORD" | docker login "$REGISTRY_HOST" -u "$ARTIFACTORY_USERNAME" --password-stdin
-      - name: Build Docker Image
-        run: |
           IMAGE="$REGISTRY_HOST/$DOCKER_REPO/fastapi-app:${GITHUB_SHA}"
-          echo "Building image: $IMAGE"
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
           docker build -t "$IMAGE" .
-          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
-      - name: Push Docker Image to JFrog
-        run: docker push "$IMAGE"
+          docker push "$IMAGE"
 
-      - name: Deploy to Azure VM
-        if: always()
+      - name: Deploy on Azure VM
         env:
           VM_HOST: ${{ secrets.VM_HOST }}
           VM_USER: ${{ secrets.VM_USER }}
           VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
         run: |
-          [[ -z "$VM_HOST" || -z "$VM_USER" ]] && echo "❌ Missing VM host/user" && exit 1
-          mkdir -p ~/.ssh
-          echo "$VM_SSH_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key "$VM_USER@$VM_HOST" \
-            "set -e; \
-             echo '$ARTIFACTORY_PASSWORD' | docker login '$REGISTRY_HOST' -u '$ARTIFACTORY_USERNAME' --password-stdin; \
-             docker pull $IMAGE; \
-             (docker stop fastapi-app || true); (docker rm fastapi-app || true); \
-             docker run -d --name fastapi-app -p 80:8080 $IMAGE"
-      # 🔐 Azure login (your requested step)
-      - name: Log In to Azure
+          [ -n "$VM_HOST" ] || { echo "Missing VM_HOST"; exit 1; }
+          mkdir -p ~/.ssh && echo "$VM_SSH_KEY" > ~/.ssh/deploy_key && chmod 600 ~/.ssh/deploy_key
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key "$VM_USER@$VM_HOST" "
+            echo '$ARTIFACTORY_PASSWORD' | docker login $REGISTRY_HOST -u $ARTIFACTORY_USERNAME --password-stdin
+            docker pull $IMAGE
+            docker stop fastapi-app || true && docker rm fastapi-app || true
+            docker run -d --name fastapi-app -p 80:8080 $IMAGE
+          "
+
+      - name: Azure login
         uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
       - name: Configure Azure Web App
         env:
-          AZURE_WEBAPP_NAME: ${{ secrets.AZURE_WEBAPP_NAME }}
-          AZURE_RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP }}
+          WEBAPP: ${{ secrets.AZURE_WEBAPP_NAME }}
+          RG: ${{ secrets.AZURE_RESOURCE_GROUP }}
         run: |
-          # Ensure Azure Web App listens on the container's 8080
-          az webapp config appsettings set \
-            --name "$AZURE_WEBAPP_NAME" \
-            --resource-group "$AZURE_RESOURCE_GROUP" \
-            --settings WEBSITES_PORT=8080
+          az webapp config appsettings set --name "$WEBAPP" --resource-group "$RG" --settings WEBSITES_PORT=8080
           az webapp config container set \
-            --name "$AZURE_WEBAPP_NAME" \
-            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$WEBAPP" --resource-group "$RG" \
             --docker-custom-image-name "$IMAGE" \
             --docker-registry-server-url "https://$REGISTRY_HOST" \
             --docker-registry-server-user "$ARTIFACTORY_USERNAME" \
             --docker-registry-server-password "$ARTIFACTORY_PASSWORD"
-          az webapp restart \
-            --name "$AZURE_WEBAPP_NAME" \
-            --resource-group "$AZURE_RESOURCE_GROUP"
+          az webapp restart --name "$WEBAPP" --resource-group "$RG"
