@@ -29,41 +29,40 @@ jobs:
           sudo apt-get install -y vault
           vault --version
 
-      # ✅ Recommended: get a short-lived Vault token via GitHub OIDC and read the secret
-      - name: Retrieve Artifactory Credentials from Vault (OIDC)
+      # Step A: OIDC auth to Vault – get short-lived VAULT_TOKEN (no static tokens)
+      - name: Authenticate to Vault (OIDC)
         uses: hashicorp/vault-action@v3
         with:
           url: ${{ secrets.VAULT_ADDR }}
           method: jwt
           path: jwt
           role: gh-actions
-          # set this to match the audience your Vault role expects
           jwtGithubAudience: https://github.com/ashoksaidev
-          exportEnv: true
-          secrets: |
-            ci/data/artifactory url | ARTIFACTORY_URL
-            ci/data/artifactory repo_docker | DOCKER_REPO
-            ci/data/artifactory username | ARTIFACTORY_USER
-            ci/data/artifactory password | ARTIFACTORY_PASSWORD
+          exportToken: true         # <-- makes VAULT_TOKEN available to next steps
 
-      # --- If you MUST keep a static token, use this instead of the step above ---
-      # - name: Retrieve Artifactory Credentials from Vault (curl, no sys mounts)
-      #   env:
-      #     VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
-      #     VAULT_NAMESPACE: ${{ secrets.VAULT_NAMESPACE }}
-      #     VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
-      #   run: |
-      #     set -euo pipefail
-      #     curl -sS \
-      #       -H "X-Vault-Token: $VAULT_TOKEN" \
-      #       -H "X-Vault-Namespace: $VAULT_NAMESPACE" \
-      #       "$VAULT_ADDR/v1/ci/data/artifactory" > secret.json
-      #     echo "ARTIFACTORY_URL=$(jq -r '.data.data.url' secret.json)" >> $GITHUB_ENV
-      #     echo "DOCKER_REPO=$(jq -r '.data.data.repo_docker' secret.json)" >> $GITHUB_ENV
-      #     echo "ARTIFACTORY_USER=$(jq -r '.data.data.username' secret.json)" >> $GITHUB_ENV
-      #     echo "ARTIFACTORY_PASSWORD=$(jq -r '.data.data.password' secret.json)" >> $GITHUB_ENV
-      #     echo "::add-mask::$(jq -r '.data.data.password' secret.json)"
-      # -------------------------------------------------------------------------
+      # Step B: Read KV secret once and auto-export all keys with ARTIFACTORY_ prefix
+      - name: Load Artifactory credentials from Vault (generic, path/key agnostic)
+        env:
+          VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
+          VAULT_NAMESPACE: ${{ secrets.VAULT_NAMESPACE }}
+          VAULT_KV_MOUNT: ${{ vars.VAULT_KV_MOUNT || 'ci' }}
+          VAULT_SECRET_PATH: ${{ vars.VAULT_SECRET_PATH || 'artifactory' }}
+        run: |
+          set -euo pipefail
+          API="$VAULT_ADDR/v1/$VAULT_KV_MOUNT/data/$VAULT_SECRET_PATH"
+          curl -sS \
+            -H "X-Vault-Token: $VAULT_TOKEN" \
+            -H "X-Vault-Namespace: ${VAULT_NAMESPACE:-}" \
+            "$API" > secret.json
+
+          # Export each key as ARTIFACTORY_<UPPERCASE_KEY>=value
+          jq -r '.data.data | to_entries[] | "\(.key)=\(.value)"' secret.json | \
+          while IFS='=' read -r k v; do
+            KEY_UP=$(echo "$k" | tr '[:lower:]' '[:upper:]')
+            [[ "$KEY_UP" =~ ^ARTIFACTORY_ ]] || KEY_UP="ARTIFACTORY_$KEY_UP"
+            echo "::add-mask::$v"
+            echo "$KEY_UP=$v" >> "$GITHUB_ENV"
+          done
 
       - name: Docker Login to JFrog
         run: |
