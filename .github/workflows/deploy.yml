@@ -55,7 +55,7 @@ jobs:
             -H "X-Vault-Namespace: ${VAULT_NAMESPACE:-}" \
             "$API" > secret.json
 
-          # Export each key as ARTIFACTORY_<UPPERCASE_KEY>=value
+          # Export each key as ARTIFACTORY_<UPPERCASE_KEY>=value for later steps
           jq -r '.data.data | to_entries[] | "\(.key)=\(.value)"' secret.json | \
           while IFS='=' read -r k v; do
             KEY_UP=$(echo "$k" | tr '[:lower:]' '[:upper:]')
@@ -64,13 +64,13 @@ jobs:
             echo "$KEY_UP=$v" >> "$GITHUB_ENV"
           done
 
-          # Convenience aliases expected later in the pipeline
-          # (map repo_docker -> DOCKER_REPO, and keep username alias if needed)
-          if grep -q '^ARTIFACTORY_REPO_DOCKER=' "$GITHUB_ENV"; then
-            echo "DOCKER_REPO=${ARTIFACTORY_REPO_DOCKER}" >> "$GITHUB_ENV"
+          # Also set DOCKER_REPO from repo_docker key if present (without using unset vars)
+          REPO=$(jq -r '.data.data.repo_docker // empty' secret.json)
+          if [ -n "$REPO" ]; then
+            echo "DOCKER_REPO=$REPO" >> "$GITHUB_ENV"
           fi
 
-      # Step C: Validate required envs (fail early with clear message)
+      # Validate required envs (fail early with clear message)
       - name: Validate required env vars
         run: |
           set -e
