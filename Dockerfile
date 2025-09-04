@@ -16,8 +16,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY src/ src/
 
 # ------------------------------------------------------------------------------
-# Stage 2: Runtime environment using minimal Chainguard Python image
-FROM cgr.dev/chainguard/python:3.11 AS runtime-stage
+# Stage 2: Runtime environment (use a valid Chainguard Python tag)
+# NOTE: cgr.dev/chainguard/python:3.11 was not found; use 3.11-dev or latest.
+FROM cgr.dev/chainguard/python:3.11-dev AS runtime-stage
 
 # Set working directory for runtime
 WORKDIR /app
@@ -31,7 +32,7 @@ ENV PYTHONPATH=/app/src
 # Expose application port
 EXPOSE 8080
 
-# Run as non-root user (for security, if available)
+# Run as non-root user (Chainguard images provide nonroot)
 USER nonroot
 
 # Start FastAPI application using Uvicorn
