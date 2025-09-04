@@ -5,7 +5,7 @@ on:
     branches: [ main ]
 
 permissions:
-  id-token: write     # for Vault OIDC
+  id-token: write     # For Vault OIDC
   contents: read
 
 jobs:
@@ -22,8 +22,8 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y jq
 
-      # --- LAYER 1: GitHub Secrets overrides (safe version) ---
-      - name: Load Artifactory from GitHub Secrets (override layer)
+      # --- GitHub Secrets override layer (optional) ---
+      - name: Load Artifactory from GitHub Secrets
         env:
           ARTIFACTORY_URL_SEC: ${{ secrets.ARTIFACTORY_URL }}
           ARTIFACTORY_USERNAME_SEC: ${{ secrets.ARTIFACTORY_USERNAME }}
@@ -31,37 +31,27 @@ jobs:
           DOCKER_REPO_SEC: ${{ secrets.DOCKER_REPO }}
         run: |
           set -euo pipefail
+          write_if_set () { [ -n "${2:-}" ] && { echo "$1=$2" >> "$GITHUB_ENV"; }; }
+          write_secret_if_set () { [ -n "${2:-}" ] && { echo "::add-mask::$2"; echo "$1=$2" >> "$GITHUB_ENV"; }; }
 
-          if [ -n "${ARTIFACTORY_URL_SEC:-}" ]; then
-            echo "ARTIFACTORY_URL=$ARTIFACTORY_URL_SEC" >> "$GITHUB_ENV"
-          fi
+          write_if_set ARTIFACTORY_URL "$ARTIFACTORY_URL_SEC"
+          write_if_set ARTIFACTORY_USERNAME "$ARTIFACTORY_USERNAME_SEC"
+          write_secret_if_set ARTIFACTORY_PASSWORD "$ARTIFACTORY_PASSWORD_SEC"
+          write_if_set DOCKER_REPO "$DOCKER_REPO_SEC"
 
-          if [ -n "${ARTIFACTORY_USERNAME_SEC:-}" ]; then
-            echo "ARTIFACTORY_USERNAME=$ARTIFACTORY_USERNAME_SEC" >> "$GITHUB_ENV"
-          fi
-
-          if [ -n "${ARTIFACTORY_PASSWORD_SEC:-}" ]; then
-            echo "::add-mask::$ARTIFACTORY_PASSWORD_SEC"
-            echo "ARTIFACTORY_PASSWORD=$ARTIFACTORY_PASSWORD_SEC" >> "$GITHUB_ENV"
-          fi
-
-          if [ -n "${DOCKER_REPO_SEC:-}" ]; then
-            echo "DOCKER_REPO=$DOCKER_REPO_SEC" >> "$GITHUB_ENV"
-          fi
-
-      # --- LAYER 2: Vault OIDC ---
+      # --- Vault OIDC (short-lived token) ---
       - name: Authenticate to Vault (OIDC)
         uses: hashicorp/vault-action@v3
         with:
-          url: ${{ secrets.VAULT_ADDR }}   # e.g., http://98.70.35.38:8200
+          url: ${{ secrets.VAULT_ADDR }}
           method: jwt
           path: jwt
           role: gh-actions
           jwtGithubAudience: https://github.com/ashoksaidev
           exportToken: true
 
-      # --- LAYER 3: Vault fallback ---
-      - name: Load Artifactory from Vault (fallback layer)
+      # --- Vault fallback (only if values missing) ---
+      - name: Load Artifactory from Vault
         env:
           VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
           VAULT_NAMESPACE: ${{ secrets.VAULT_NAMESPACE }}
@@ -91,48 +81,25 @@ jobs:
           set_if_empty ARTIFACTORY_PASSWORD '.data.data.password' yes
           set_if_empty DOCKER_REPO          '.data.data.repo_docker'
 
-      - name: Validate required variables
+      # Validate required values
+      - name: Validate configuration
         run: |
           set -e
-          missing=0
           for v in ARTIFACTORY_URL ARTIFACTORY_USERNAME ARTIFACTORY_PASSWORD DOCKER_REPO; do
             if [ -z "${!v:-}" ]; then
               echo "❌ Missing required variable: $v"
-              missing=1
-            fi
-          done
-          if [ $missing -ne 0 ]; then exit 1; fi
-          echo "✅ Required variables present"
-
-      - name: Normalize registry & validate credentials
-        run: |
-          set -euo pipefail
-          RAW="$ARTIFACTORY_URL"
-          REGISTRY_HOST="${RAW#http://}"; REGISTRY_HOST="${REGISTRY_HOST#https://}"
-          REGISTRY_HOST="${REGISTRY_HOST%%/*}"
-          echo "REGISTRY_HOST=$REGISTRY_HOST" >> "$GITHUB_ENV"
-
-          set +e
-          PING_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "Authorization: Bearer $ARTIFACTORY_PASSWORD" \
-            "https://$REGISTRY_HOST/artifactory/api/system/ping")
-          set -e
-          if [ "$PING_CODE" != "200" ]; then
-            echo "⚠️ Bearer ping failed ($PING_CODE). Trying basic auth…"
-            set +e
-            PING_CODE_BASIC=$(curl -s -o /dev/null -w "%{http_code}" \
-              -u "$ARTIFACTORY_USERNAME:$ARTIFACTORY_PASSWORD" \
-              "https://$REGISTRY_HOST/artifactory/api/system/ping")
-            set -e
-            if [ "$PING_CODE_BASIC" != "200" ]; then
-              echo "❌ Artifactory auth failed. Ensure password is a Scoped Token for '$ARTIFACTORY_USERNAME', and URL is host-only."
               exit 1
             fi
-          fi
-          echo "✅ Artifactory auth OK"
+          done
+          echo "✅ Required values present"
 
+      # Docker login, build, push
       - name: Docker Login to JFrog
         run: |
+          REGISTRY_HOST="${ARTIFACTORY_URL#http://}"
+          REGISTRY_HOST="${REGISTRY_HOST#https://}"
+          REGISTRY_HOST="${REGISTRY_HOST%%/*}"
+          echo "REGISTRY_HOST=$REGISTRY_HOST" >> "$GITHUB_ENV"
           echo "$ARTIFACTORY_PASSWORD" | docker login "$REGISTRY_HOST" -u "$ARTIFACTORY_USERNAME" --password-stdin
 
       - name: Build Docker Image
@@ -140,11 +107,12 @@ jobs:
           IMAGE="$REGISTRY_HOST/$DOCKER_REPO/fastapi-app:${GITHUB_SHA}"
           echo "Building image: $IMAGE"
           docker build -t "$IMAGE" .
-          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
 
       - name: Push Docker Image to JFrog
         run: docker push "$IMAGE"
 
+      # Deploy to Azure VM
       - name: Deploy to Azure VM
         if: always()
         env:
@@ -156,14 +124,14 @@ jobs:
           mkdir -p ~/.ssh
           echo "$VM_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-
           ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key "$VM_USER@$VM_HOST" \
             "set -e; \
              echo '$ARTIFACTORY_PASSWORD' | docker login '$REGISTRY_HOST' -u '$ARTIFACTORY_USERNAME' --password-stdin; \
-             docker pull $IMAGE; \
+             docker pull '$IMAGE'; \
              (docker stop fastapi-app || true); (docker rm fastapi-app || true); \
-             docker run -d --name fastapi-app -p 80:8080 $IMAGE"
+             docker run -d --name fastapi-app -p 80:80 '$IMAGE'"
 
+      # ✅ This is the step you asked to add
       - name: Log In to Azure
         uses: azure/login@v1
         with:
@@ -174,12 +142,6 @@ jobs:
           AZURE_WEBAPP_NAME: ${{ secrets.AZURE_WEBAPP_NAME }}
           AZURE_RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP }}
         run: |
-          # Ensure Azure Web App listens on the container's 8080
-          az webapp config appsettings set \
-            --name "$AZURE_WEBAPP_NAME" \
-            --resource-group "$AZURE_RESOURCE_GROUP" \
-            --settings WEBSITES_PORT=8080
-
           az webapp config container set \
             --name "$AZURE_WEBAPP_NAME" \
             --resource-group "$AZURE_RESOURCE_GROUP" \
@@ -187,7 +149,6 @@ jobs:
             --docker-registry-server-url "https://$REGISTRY_HOST" \
             --docker-registry-server-user "$ARTIFACTORY_USERNAME" \
             --docker-registry-server-password "$ARTIFACTORY_PASSWORD"
-
           az webapp restart \
             --name "$AZURE_WEBAPP_NAME" \
             --resource-group "$AZURE_RESOURCE_GROUP"
