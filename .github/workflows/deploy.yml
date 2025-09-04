@@ -2,8 +2,7 @@ name: Deploy FastAPI Application
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
 
 permissions:
   id-token: write
@@ -28,7 +27,7 @@ jobs:
           sudo apt-get install -y vault
           vault --version
 
-      # Authenticate to Vault via GitHub OIDC (no static token)
+      # Get short-lived VAULT_TOKEN via GitHub OIDC
       - name: Authenticate to Vault (OIDC)
         uses: hashicorp/vault-action@v3
         with:
@@ -39,7 +38,7 @@ jobs:
           jwtGithubAudience: https://github.com/ashoksaidev
           exportToken: true
 
-      # Fetch Artifactory creds from Vault
+      # Read KV secret and export all keys (expects: url, repo_docker, username, password)
       - name: Load Artifactory credentials from Vault
         env:
           VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
@@ -54,7 +53,7 @@ jobs:
             -H "X-Vault-Namespace: ${VAULT_NAMESPACE:-}" \
             "$API" > secret.json
 
-          # Export keys as ARTIFACTORY_<UPPERCASE_KEY>
+          # Export each key as ARTIFACTORY_<UPPERCASE_KEY>=value for later steps
           jq -r '.data.data | to_entries[] | "\(.key)=\(.value)"' secret.json | \
           while IFS='=' read -r k v; do
             KEY_UP=$(echo "$k" | tr '[:lower:]' '[:upper:]')
@@ -63,13 +62,12 @@ jobs:
             echo "$KEY_UP=$v" >> "$GITHUB_ENV"
           done
 
-          # Set DOCKER_REPO if repo_docker exists
+          # Also set DOCKER_REPO from repo_docker if present
           REPO=$(jq -r '.data.data.repo_docker // empty' secret.json)
           if [ -n "$REPO" ]; then
             echo "DOCKER_REPO=$REPO" >> "$GITHUB_ENV"
           fi
 
-      # Validate required env vars
       - name: Validate required env vars
         run: |
           set -e
@@ -84,13 +82,35 @@ jobs:
             exit 1
           fi
 
+      # Ensure ARTIFACTORY_URL is host-only and creds work
+      - name: Normalize registry & validate Artifactory creds
+        run: |
+          set -euo pipefail
+          RAW="$ARTIFACTORY_URL"
+          REGISTRY_HOST="${RAW#http://}"; REGISTRY_HOST="${REGISTRY_HOST#https://}"
+          REGISTRY_HOST="${REGISTRY_HOST%%/*}"
+          echo "REGISTRY_HOST=$REGISTRY_HOST" >> "$GITHUB_ENV"
+
+          # Quick auth ping; expects 200 when username + access token are valid
+          set +e
+          PING_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -u "$ARTIFACTORY_USERNAME:$ARTIFACTORY_PASSWORD" \
+            "https://$REGISTRY_HOST/artifactory/api/system/ping")
+          set -e
+          if [ "$PING_CODE" != "200" ]; then
+            echo "❌ Artifactory auth ping failed (HTTP $PING_CODE)."
+            echo "   Check Vault: url(host only), username(ci-user), password(Access Token)."
+            exit 1
+          fi
+          echo "✅ Artifactory auth ping OK"
+
       - name: Docker Login to JFrog
         run: |
-          echo "$ARTIFACTORY_PASSWORD" | docker login "$ARTIFACTORY_URL" -u "$ARTIFACTORY_USERNAME" --password-stdin
+          echo "$ARTIFACTORY_PASSWORD" | docker login "$REGISTRY_HOST" -u "$ARTIFACTORY_USERNAME" --password-stdin
 
       - name: Build Docker Image
         run: |
-          IMAGE="$ARTIFACTORY_URL/$DOCKER_REPO/fastapi-app:${GITHUB_SHA}"
+          IMAGE="$REGISTRY_HOST/$DOCKER_REPO/fastapi-app:${GITHUB_SHA}"
           echo "Building image: $IMAGE"
           docker build -t "$IMAGE" .
           echo "IMAGE=$IMAGE" >> $GITHUB_ENV
@@ -105,10 +125,9 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.VM_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-
           ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key "${{ secrets.VM_USER }}@${{ secrets.VM_HOST }}" \
             "set -e; \
-             echo '$ARTIFACTORY_PASSWORD' | docker login '$ARTIFACTORY_URL' -u '$ARTIFACTORY_USERNAME' --password-stdin; \
+             echo '$ARTIFACTORY_PASSWORD' | docker login '$REGISTRY_HOST' -u '$ARTIFACTORY_USERNAME' --password-stdin; \
              docker pull '$IMAGE'; \
              (docker stop fastapi-app || true); (docker rm fastapi-app || true); \
              docker run -d --name fastapi-app -p 80:80 '$IMAGE'"
@@ -124,7 +143,7 @@ jobs:
             --name "${{ secrets.AZURE_WEBAPP_NAME }}" \
             --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
             --docker-custom-image-name "$IMAGE" \
-            --docker-registry-server-url "https://$ARTIFACTORY_URL" \
+            --docker-registry-server-url "https://$REGISTRY_HOST" \
             --docker-registry-server-user "$ARTIFACTORY_USERNAME" \
             --docker-registry-server-password "$ARTIFACTORY_PASSWORD"
           az webapp restart \
