@@ -160,9 +160,9 @@ jobs:
           ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key "$VM_USER@$VM_HOST" \
             "set -e; \
              echo '$ARTIFACTORY_PASSWORD' | docker login '$REGISTRY_HOST' -u '$ARTIFACTORY_USERNAME' --password-stdin; \
-             docker pull '$IMAGE'; \
+             docker pull $IMAGE; \
              (docker stop fastapi-app || true); (docker rm fastapi-app || true); \
-             docker run -d --name fastapi-app -p 80:80 '$IMAGE'"
+             docker run -d --name fastapi-app -p 80:8080 $IMAGE"
 
       - name: Log In to Azure
         uses: azure/login@v1
@@ -174,6 +174,12 @@ jobs:
           AZURE_WEBAPP_NAME: ${{ secrets.AZURE_WEBAPP_NAME }}
           AZURE_RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP }}
         run: |
+          # Ensure Azure Web App listens on the container's 8080
+          az webapp config appsettings set \
+            --name "$AZURE_WEBAPP_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --settings WEBSITES_PORT=8080
+
           az webapp config container set \
             --name "$AZURE_WEBAPP_NAME" \
             --resource-group "$AZURE_RESOURCE_GROUP" \
@@ -181,6 +187,7 @@ jobs:
             --docker-registry-server-url "https://$REGISTRY_HOST" \
             --docker-registry-server-user "$ARTIFACTORY_USERNAME" \
             --docker-registry-server-password "$ARTIFACTORY_PASSWORD"
+
           az webapp restart \
             --name "$AZURE_WEBAPP_NAME" \
             --resource-group "$AZURE_RESOURCE_GROUP"
