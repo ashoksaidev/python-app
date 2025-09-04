@@ -20,15 +20,19 @@ jobs:
       - name: Install jq & curl
         run: sudo apt-get update -y && sudo apt-get install -y jq curl
 
+      # 1) Load from GitHub Secrets (overrides)
       - name: Load from GitHub Secrets (overrides)
+        shell: bash
         run: |
-          [ -n "${{ secrets.ARTIFACTORY_URL }}" ] && echo "ARTIFACTORY_URL=${{ secrets.ARTIFACTORY_URL }}" >> $GITHUB_ENV
-          [ -n "${{ secrets.ARTIFACTORY_USERNAME }}" ] && echo "ARTIFACTORY_USERNAME=${{ secrets.ARTIFACTORY_USERNAME }}" >> $GITHUB_ENV
-          if [ -n "${{ secrets.ARTIFACTORY_PASSWORD }}" ]; then
-            echo "::add-mask::${{ secrets.ARTIFACTORY_PASSWORD }}"; echo "ARTIFACTORY_PASSWORD=${{ secrets.ARTIFACTORY_PASSWORD }}" >> $GITHUB_ENV
-          fi
-          [ -n "${{ secrets.DOCKER_REPO }}" ] && echo "DOCKER_REPO=${{ secrets.DOCKER_REPO }}" >> $GITHUB_ENV
+          put()       { [[ -n "$2" ]] && echo "$1=$2" >> "$GITHUB_ENV"; }
+          put_secret(){ [[ -n "$2" ]] && { echo "::add-mask::$2"; echo "$1=$2" >> "$GITHUB_ENV"; }; }
 
+          put        ARTIFACTORY_URL      "${{ secrets.ARTIFACTORY_URL }}"
+          put        ARTIFACTORY_USERNAME "${{ secrets.ARTIFACTORY_USERNAME }}"
+          put_secret ARTIFACTORY_PASSWORD "${{ secrets.ARTIFACTORY_PASSWORD }}"
+          put        DOCKER_REPO          "${{ secrets.DOCKER_REPO }}"
+
+      # 2) Vault OIDC + fallback (fills any missing vars)
       - name: Authenticate to Vault (OIDC)
         uses: hashicorp/vault-action@v3
         with:
@@ -46,39 +50,48 @@ jobs:
         run: |
           API="$VAULT_ADDR/v1/ci/data/artifactory"
           curl -sS -H "X-Vault-Token: $VAULT_TOKEN" -H "X-Vault-Namespace: ${VAULT_NAMESPACE:-}" "$API" > secret.json
-          [ -z "$ARTIFACTORY_URL" ]      && echo "ARTIFACTORY_URL=$(jq -r '.data.data.url' secret.json)" >> $GITHUB_ENV
-          [ -z "$ARTIFACTORY_USERNAME" ] && echo "ARTIFACTORY_USERNAME=$(jq -r '.data.data.username' secret.json)" >> $GITHUB_ENV
-          if [ -z "$ARTIFACTORY_PASSWORD" ]; then PW=$(jq -r '.data.data.password' secret.json); echo "::add-mask::$PW"; echo "ARTIFACTORY_PASSWORD=$PW" >> $GITHUB_ENV; fi
-          [ -z "$DOCKER_REPO" ]          && echo "DOCKER_REPO=$(jq -r '.data.data.repo_docker' secret.json)" >> $GITHUB_ENV
+          [[ -z "$ARTIFACTORY_URL"      ]] && echo "ARTIFACTORY_URL=$(jq -r '.data.data.url' secret.json)" >> "$GITHUB_ENV"
+          [[ -z "$ARTIFACTORY_USERNAME" ]] && echo "ARTIFACTORY_USERNAME=$(jq -r '.data.data.username' secret.json)" >> "$GITHUB_ENV"
+          if [[ -z "$ARTIFACTORY_PASSWORD" ]]; then
+            PW=$(jq -r '.data.data.password' secret.json)
+            echo "::add-mask::$PW"
+            echo "ARTIFACTORY_PASSWORD=$PW" >> "$GITHUB_ENV"
+          fi
+          [[ -z "$DOCKER_REPO" ]] && echo "DOCKER_REPO=$(jq -r '.data.data.repo_docker' secret.json)" >> "$GITHUB_ENV"
 
+      # 3) Validate, normalize host, verify Artifactory auth
       - name: Verify config & auth
         run: |
           for v in ARTIFACTORY_URL ARTIFACTORY_USERNAME ARTIFACTORY_PASSWORD DOCKER_REPO; do
-            [ -z "${!v:-}" ] && { echo "Missing $v"; exit 1; }
+            [[ -z "${!v:-}" ]] && { echo "Missing $v"; exit 1; }
           done
-          RAW="$ARTIFACTORY_URL"; HOST="${RAW#http://}"; HOST="${HOST#https://}"; HOST="${HOST%%/*}"
-          echo "REGISTRY_HOST=$HOST" >> $GITHUB_ENV
+          RAW="$ARTIFACTORY_URL"
+          HOST="${RAW#http://}"; HOST="${HOST#https://}"; HOST="${HOST%%/*}"
+          echo "REGISTRY_HOST=$HOST" >> "$GITHUB_ENV"
+
           set +e
           CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $ARTIFACTORY_PASSWORD" "https://$HOST/artifactory/api/system/ping")
-          [ "$CODE" != "200" ] && CODE=$(curl -s -o /dev/null -w "%{http_code}" -u "$ARTIFACTORY_USERNAME:$ARTIFACTORY_PASSWORD" "https://$HOST/artifactory/api/system/ping")
+          [[ "$CODE" != "200" ]] && CODE=$(curl -s -o /dev/null -w "%{http_code}" -u "$ARTIFACTORY_USERNAME:$ARTIFACTORY_PASSWORD" "https://$HOST/artifactory/api/system/ping")
           set -e
-          [ "$CODE" = "200" ] || { echo "Artifactory auth failed"; exit 1; }
+          [[ "$CODE" == "200" ]] || { echo "Artifactory auth failed"; exit 1; }
 
+      # 4) Build & push image to JFrog
       - name: Docker login, build, push
         run: |
           echo "$ARTIFACTORY_PASSWORD" | docker login "$REGISTRY_HOST" -u "$ARTIFACTORY_USERNAME" --password-stdin
           IMAGE="$REGISTRY_HOST/$DOCKER_REPO/fastapi-app:${GITHUB_SHA}"
-          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
           docker build -t "$IMAGE" .
           docker push "$IMAGE"
 
+      # 5) Deploy on Azure VM (Docker must be installed on the VM)
       - name: Deploy on Azure VM
         env:
           VM_HOST: ${{ secrets.VM_HOST }}
           VM_USER: ${{ secrets.VM_USER }}
           VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
         run: |
-          [ -n "$VM_HOST" ] || { echo "Missing VM_HOST"; exit 1; }
+          [[ -n "$VM_HOST" ]] || { echo "Missing VM_HOST"; exit 1; }
           mkdir -p ~/.ssh && echo "$VM_SSH_KEY" > ~/.ssh/deploy_key && chmod 600 ~/.ssh/deploy_key
           ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key "$VM_USER@$VM_HOST" "
             echo '$ARTIFACTORY_PASSWORD' | docker login $REGISTRY_HOST -u $ARTIFACTORY_USERNAME --password-stdin
@@ -87,6 +100,7 @@ jobs:
             docker run -d --name fastapi-app -p 80:8080 $IMAGE
           "
 
+      # 6) Configure Azure Web App to use the same image
       - name: Azure login
         uses: azure/login@v1
         with:
