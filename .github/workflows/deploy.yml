@@ -18,7 +18,6 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      # Install Vault CLI (handy for local testing / fallback)
       - name: Install Vault CLI
         run: |
           sudo apt-get update -y
@@ -29,7 +28,7 @@ jobs:
           sudo apt-get install -y vault
           vault --version
 
-      # Step A: OIDC auth to Vault – get short-lived VAULT_TOKEN (no static tokens)
+      # Authenticate to Vault via GitHub OIDC (no static token)
       - name: Authenticate to Vault (OIDC)
         uses: hashicorp/vault-action@v3
         with:
@@ -40,8 +39,8 @@ jobs:
           jwtGithubAudience: https://github.com/ashoksaidev
           exportToken: true
 
-      # Step B: Read KV secret once and auto-export keys (prefix with ARTIFACTORY_)
-      - name: Load Artifactory credentials from Vault (generic)
+      # Fetch Artifactory creds from Vault
+      - name: Load Artifactory credentials from Vault
         env:
           VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
           VAULT_NAMESPACE: ${{ secrets.VAULT_NAMESPACE }}
@@ -55,7 +54,7 @@ jobs:
             -H "X-Vault-Namespace: ${VAULT_NAMESPACE:-}" \
             "$API" > secret.json
 
-          # Export each key as ARTIFACTORY_<UPPERCASE_KEY>=value for later steps
+          # Export keys as ARTIFACTORY_<UPPERCASE_KEY>
           jq -r '.data.data | to_entries[] | "\(.key)=\(.value)"' secret.json | \
           while IFS='=' read -r k v; do
             KEY_UP=$(echo "$k" | tr '[:lower:]' '[:upper:]')
@@ -64,13 +63,13 @@ jobs:
             echo "$KEY_UP=$v" >> "$GITHUB_ENV"
           done
 
-          # Also set DOCKER_REPO from repo_docker key if present (without using unset vars)
+          # Set DOCKER_REPO if repo_docker exists
           REPO=$(jq -r '.data.data.repo_docker // empty' secret.json)
           if [ -n "$REPO" ]; then
             echo "DOCKER_REPO=$REPO" >> "$GITHUB_ENV"
           fi
 
-      # Validate required envs (fail early with clear message)
+      # Validate required env vars
       - name: Validate required env vars
         run: |
           set -e
