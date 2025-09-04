@@ -17,13 +17,12 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      # Keep the runner light; just ensure jq is present
       - name: Install jq
         run: |
           sudo apt-get update -y
           sudo apt-get install -y jq
 
-      # --- LAYER 1: Optional GitHub Secrets overrides (use to hot-swap without touching Vault) ---
+      # --- LAYER 1: GitHub Secrets overrides (safe version) ---
       - name: Load Artifactory from GitHub Secrets (override layer)
         env:
           ARTIFACTORY_URL_SEC: ${{ secrets.ARTIFACTORY_URL }}
@@ -32,15 +31,25 @@ jobs:
           DOCKER_REPO_SEC: ${{ secrets.DOCKER_REPO }}
         run: |
           set -euo pipefail
-          write_plain_if_set () { [ -n "${2:-}" ] && echo "$1=$2" >> "$GITHUB_ENV"; }
-          write_secret_if_set () { [ -n "${2:-}" ] && { echo "::add-mask::$2"; echo "$1=$2" >> "$GITHUB_ENV"; }; }
 
-          write_plain_if_set  ARTIFACTORY_URL       "$ARTIFACTORY_URL_SEC"
-          write_plain_if_set  ARTIFACTORY_USERNAME  "$ARTIFACTORY_USERNAME_SEC"
-          write_secret_if_set ARTIFACTORY_PASSWORD  "$ARTIFACTORY_PASSWORD_SEC"
-          write_plain_if_set  DOCKER_REPO           "$DOCKER_REPO_SEC"
+          if [ -n "${ARTIFACTORY_URL_SEC:-}" ]; then
+            echo "ARTIFACTORY_URL=$ARTIFACTORY_URL_SEC" >> "$GITHUB_ENV"
+          fi
 
-      # --- LAYER 2: Vault OIDC (short-lived token) ---
+          if [ -n "${ARTIFACTORY_USERNAME_SEC:-}" ]; then
+            echo "ARTIFACTORY_USERNAME=$ARTIFACTORY_USERNAME_SEC" >> "$GITHUB_ENV"
+          fi
+
+          if [ -n "${ARTIFACTORY_PASSWORD_SEC:-}" ]; then
+            echo "::add-mask::$ARTIFACTORY_PASSWORD_SEC"
+            echo "ARTIFACTORY_PASSWORD=$ARTIFACTORY_PASSWORD_SEC" >> "$GITHUB_ENV"
+          fi
+
+          if [ -n "${DOCKER_REPO_SEC:-}" ]; then
+            echo "DOCKER_REPO=$DOCKER_REPO_SEC" >> "$GITHUB_ENV"
+          fi
+
+      # --- LAYER 2: Vault OIDC ---
       - name: Authenticate to Vault (OIDC)
         uses: hashicorp/vault-action@v3
         with:
@@ -51,7 +60,7 @@ jobs:
           jwtGithubAudience: https://github.com/ashoksaidev
           exportToken: true
 
-      # --- LAYER 3: Pull missing fields from Vault KV v2 (fallback if GH Secrets not set) ---
+      # --- LAYER 3: Vault fallback ---
       - name: Load Artifactory from Vault (fallback layer)
         env:
           VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
@@ -66,7 +75,6 @@ jobs:
             -H "X-Vault-Namespace: ${VAULT_NAMESPACE:-}" \
             "$API" > secret.json
 
-          # Helper to only set if empty (so GH Secrets overrides win)
           set_if_empty () {
             local KEY="$1" JSON_PATH="$2" MASK="${3:-no}"
             if [ -z "${!KEY:-}" ]; then
@@ -83,7 +91,6 @@ jobs:
           set_if_empty ARTIFACTORY_PASSWORD '.data.data.password' yes
           set_if_empty DOCKER_REPO          '.data.data.repo_docker'
 
-      # Validate required configuration
       - name: Validate required variables
         run: |
           set -e
@@ -97,7 +104,6 @@ jobs:
           if [ $missing -ne 0 ]; then exit 1; fi
           echo "✅ Required variables present"
 
-      # Normalize host & verify Artifactory credentials (Bearer preferred; falls back to basic)
       - name: Normalize registry & validate credentials
         run: |
           set -euo pipefail
@@ -106,7 +112,6 @@ jobs:
           REGISTRY_HOST="${REGISTRY_HOST%%/*}"
           echo "REGISTRY_HOST=$REGISTRY_HOST" >> "$GITHUB_ENV"
 
-          # Bearer ping for scoped token
           set +e
           PING_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
             -H "Authorization: Bearer $ARTIFACTORY_PASSWORD" \
@@ -126,7 +131,6 @@ jobs:
           fi
           echo "✅ Artifactory auth OK"
 
-      # Build & Push to JFrog
       - name: Docker Login to JFrog
         run: |
           echo "$ARTIFACTORY_PASSWORD" | docker login "$REGISTRY_HOST" -u "$ARTIFACTORY_USERNAME" --password-stdin
@@ -141,7 +145,6 @@ jobs:
       - name: Push Docker Image to JFrog
         run: docker push "$IMAGE"
 
-      # Deploy to Azure VM (Docker must be installed on the VM)
       - name: Deploy to Azure VM
         if: always()
         env:
@@ -161,7 +164,6 @@ jobs:
              (docker stop fastapi-app || true); (docker rm fastapi-app || true); \
              docker run -d --name fastapi-app -p 80:80 '$IMAGE'"
 
-      # Configure Azure Web App to pull from JFrog
       - name: Log In to Azure
         uses: azure/login@v1
         with:
