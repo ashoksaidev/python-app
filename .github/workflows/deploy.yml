@@ -19,31 +19,45 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      # Step 2: Install Vault CLI (needed to interact with Vault if required later)
+      # Step 2: Install Vault CLI via HashiCorp APT repo
       - name: Install Vault CLI
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y unzip curl
-          curl -fsSL https://releases.hashicorp.com/vault/1.20.2/vault_1.20.2_linux_amd64.zip -o vault.zip
-          unzip vault.zip
-          sudo mv vault /usr/local/bin/
+          sudo apt-get install -y curl gnupg lsb-release software-properties-common jq
+          curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
+          sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
+          sudo apt-get update -y
+          sudo apt-get install -y vault
           vault --version
 
-      # Step 3: Retrieve Artifactory credentials from Vault (✅ fixed path)
-      - name: Retrieve Artifactory Credentials from Vault
-        uses: hashicorp/vault-action@v3
-        with:
-          url: ${{ secrets.VAULT_ADDR }}
-          method: jwt
-          path: jwt
-          role: gh-actions
-          jwtGithubAudience: https://github.com/ashoksaidev
-          exportEnv: true
-          secrets: |
-            ci/data/artifactory url | ARTIFACTORY_URL
-            ci/data/artifactory repo_docker | DOCKER_REPO
-            ci/data/artifactory username | ARTIFACTORY_USER
-            ci/data/artifactory password | ARTIFACTORY_PASSWORD
+      # Step 3: Fetch Artifactory secrets from Vault (KV v2) using CLI
+      # Expected keys in secret: url, repo_docker, username, password
+      - name: Retrieve Artifactory Credentials from Vault (CLI)
+        env:
+          VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
+          VAULT_NAMESPACE: ${{ secrets.VAULT_NAMESPACE }}
+          VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Read from KV v2 mount "ci", path "artifactory"
+          vault kv get -namespace="$VAULT_NAMESPACE" -mount=ci -format=json artifactory > secret.json
+
+          ARTIFACTORY_URL=$(jq -r '.data.data.url' secret.json)
+          DOCKER_REPO=$(jq -r '.data.data.repo_docker' secret.json)
+          ARTIFACTORY_USER=$(jq -r '.data.data.username' secret.json)
+          ARTIFACTORY_PASSWORD=$(jq -r '.data.data.password' secret.json)
+
+          # Mask sensitive values in logs
+          echo "::add-mask::$ARTIFACTORY_PASSWORD"
+          echo "::add-mask::$ARTIFACTORY_USER"
+
+          # Export for later steps
+          {
+            echo "ARTIFACTORY_URL=$ARTIFACTORY_URL"
+            echo "DOCKER_REPO=$DOCKER_REPO"
+            echo "ARTIFACTORY_USER=$ARTIFACTORY_USER"
+            echo "ARTIFACTORY_PASSWORD=$ARTIFACTORY_PASSWORD"
+          } >> "$GITHUB_ENV"
 
       # Step 4: Docker login to JFrog
       - name: Docker Login to JFrog
@@ -56,23 +70,24 @@ jobs:
           IMAGE="$ARTIFACTORY_URL/$DOCKER_REPO/fastapi-app:${GITHUB_SHA}"
           echo "Building image: $IMAGE"
           docker build -t "$IMAGE" .
-          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
 
       # Step 6: Push Docker image to JFrog
       - name: Push Docker Image to JFrog
-        run: docker push $IMAGE
+        run: docker push "$IMAGE"
 
       # Step 7: Deploy to Azure VM
       - name: Deploy to Azure VM
         if: always()
         run: |
           [[ -z "${{ secrets.VM_HOST }}" || -z "${{ secrets.VM_USER }}" ]] && echo "❌ Missing VM host/user" && exit 1
+          mkdir -p ~/.ssh
           echo "${{ secrets.VM_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key "${{ secrets.VM_USER }}@${{ secrets.VM_HOST }}" \
             "docker login $ARTIFACTORY_URL -u $ARTIFACTORY_USER -p '$ARTIFACTORY_PASSWORD' && \
              docker pull $IMAGE && \
-             docker stop fastapi-app || true && docker rm fastapi-app || true && \
+             (docker stop fastapi-app || true) && (docker rm fastapi-app || true) && \
              docker run -d --name fastapi-app -p 80:80 $IMAGE"
 
       # Step 8: Deploy to Azure Web App
