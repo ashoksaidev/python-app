@@ -38,10 +38,10 @@ jobs:
           path: jwt
           role: gh-actions
           jwtGithubAudience: https://github.com/ashoksaidev
-          exportToken: true         # <-- makes VAULT_TOKEN available to next steps
+          exportToken: true
 
-      # Step B: Read KV secret once and auto-export all keys with ARTIFACTORY_ prefix
-      - name: Load Artifactory credentials from Vault (generic, path/key agnostic)
+      # Step B: Read KV secret once and auto-export keys (prefix with ARTIFACTORY_)
+      - name: Load Artifactory credentials from Vault (generic)
         env:
           VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
           VAULT_NAMESPACE: ${{ secrets.VAULT_NAMESPACE }}
@@ -64,9 +64,30 @@ jobs:
             echo "$KEY_UP=$v" >> "$GITHUB_ENV"
           done
 
+          # Convenience aliases expected later in the pipeline
+          # (map repo_docker -> DOCKER_REPO, and keep username alias if needed)
+          if grep -q '^ARTIFACTORY_REPO_DOCKER=' "$GITHUB_ENV"; then
+            echo "DOCKER_REPO=${ARTIFACTORY_REPO_DOCKER}" >> "$GITHUB_ENV"
+          fi
+
+      # Step C: Validate required envs (fail early with clear message)
+      - name: Validate required env vars
+        run: |
+          set -e
+          missing=0
+          for v in ARTIFACTORY_URL ARTIFACTORY_USERNAME ARTIFACTORY_PASSWORD DOCKER_REPO; do
+            if [ -z "${!v:-}" ]; then
+              echo "❌ Missing required variable: $v"
+              missing=1
+            fi
+          done
+          if [ $missing -ne 0 ]; then
+            exit 1
+          fi
+
       - name: Docker Login to JFrog
         run: |
-          echo "$ARTIFACTORY_PASSWORD" | docker login "$ARTIFACTORY_URL" -u "$ARTIFACTORY_USER" --password-stdin
+          echo "$ARTIFACTORY_PASSWORD" | docker login "$ARTIFACTORY_URL" -u "$ARTIFACTORY_USERNAME" --password-stdin
 
       - name: Build Docker Image
         run: |
@@ -88,7 +109,7 @@ jobs:
 
           ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key "${{ secrets.VM_USER }}@${{ secrets.VM_HOST }}" \
             "set -e; \
-             echo '$ARTIFACTORY_PASSWORD' | docker login '$ARTIFACTORY_URL' -u '$ARTIFACTORY_USER' --password-stdin; \
+             echo '$ARTIFACTORY_PASSWORD' | docker login '$ARTIFACTORY_URL' -u '$ARTIFACTORY_USERNAME' --password-stdin; \
              docker pull '$IMAGE'; \
              (docker stop fastapi-app || true); (docker rm fastapi-app || true); \
              docker run -d --name fastapi-app -p 80:80 '$IMAGE'"
@@ -105,7 +126,7 @@ jobs:
             --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
             --docker-custom-image-name "$IMAGE" \
             --docker-registry-server-url "https://$ARTIFACTORY_URL" \
-            --docker-registry-server-user "$ARTIFACTORY_USER" \
+            --docker-registry-server-user "$ARTIFACTORY_USERNAME" \
             --docker-registry-server-password "$ARTIFACTORY_PASSWORD"
           az webapp restart \
             --name "${{ secrets.AZURE_WEBAPP_NAME }}" \
