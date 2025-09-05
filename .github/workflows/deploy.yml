@@ -47,10 +47,13 @@ jobs:
         run: |
           curl -sS -H "X-Vault-Token: $VAULT_TOKEN" -H "X-Vault-Namespace: ${VAULT_NAMESPACE:-}" \
             "$VAULT_ADDR/v1/ci/data/artifactory" > secret.json
-          for var in url username password repo_docker; do
-            [[ -z "${!var^^}" ]] && echo "${var^^}=$(jq -r ".data.data.$var" secret.json)" >> "$GITHUB_ENV"
-          done
-          echo "::add-mask::$(jq -r '.data.data.password' secret.json)"
+
+          echo "ARTIFACTORY_URL=$(jq -r '.data.data.url' secret.json)" >> "$GITHUB_ENV"
+          echo "ARTIFACTORY_USERNAME=$(jq -r '.data.data.username' secret.json)" >> "$GITHUB_ENV"
+          PW=$(jq -r '.data.data.password' secret.json)
+          echo "::add-mask::$PW"
+          echo "ARTIFACTORY_PASSWORD=$PW" >> "$GITHUB_ENV"
+          echo "DOCKER_REPO=$(jq -r '.data.data.repo_docker' secret.json)" >> "$GITHUB_ENV"
 
       - name: Verify Artifactory access
         shell: bash
