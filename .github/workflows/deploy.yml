@@ -11,34 +11,26 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    name: Build and Deploy FastAPI App
+    name: Build and Deploy to Azure Web App
 
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install jq and curl
+      - name: Install dependencies
         run: sudo apt-get update -y && sudo apt-get install -y jq curl
 
-      # Prefer GitHub Secrets; we'll fall back to Vault for anything missing.
-      - name: Load Artifactory vars from GitHub Secrets
+      # Load secrets from GitHub if available
+      - name: Load Artifactory secrets from GitHub
         shell: bash
         run: |
-          if [[ -n "${{ secrets.ARTIFACTORY_URL }}" ]]; then
-            echo "ARTIFACTORY_URL=${{ secrets.ARTIFACTORY_URL }}" >> "$GITHUB_ENV"
-          fi
-          if [[ -n "${{ secrets.ARTIFACTORY_USERNAME }}" ]]; then
-            echo "ARTIFACTORY_USERNAME=${{ secrets.ARTIFACTORY_USERNAME }}" >> "$GITHUB_ENV"
-          fi
-          if [[ -n "${{ secrets.ARTIFACTORY_PASSWORD }}" ]]; then
-            echo "::add-mask::${{ secrets.ARTIFACTORY_PASSWORD }}"
-            echo "ARTIFACTORY_PASSWORD=${{ secrets.ARTIFACTORY_PASSWORD }}" >> "$GITHUB_ENV"
-          fi
-          if [[ -n "${{ secrets.DOCKER_REPO }}" ]]; then
-            echo "DOCKER_REPO=${{ secrets.DOCKER_REPO }}" >> "$GITHUB_ENV"
-          fi
+          for var in ARTIFACTORY_URL ARTIFACTORY_USERNAME ARTIFACTORY_PASSWORD DOCKER_REPO; do
+            [[ -n "${{ secrets[$var] }}" ]] && echo "$var=${{ secrets[$var] }}" >> "$GITHUB_ENV"
+          done
+          echo "::add-mask::${{ secrets.ARTIFACTORY_PASSWORD }}"
 
-      - name: Authenticate to Vault (OIDC)
+      # Authenticate to Vault and fallback to Vault secrets if needed
+      - name: Vault OIDC Authentication
         uses: hashicorp/vault-action@v3
         with:
           url: ${{ secrets.VAULT_ADDR }}
@@ -48,57 +40,34 @@ jobs:
           jwtGithubAudience: https://github.com/ashoksaidev
           exportToken: true
 
-      - name: Load Artifactory vars from Vault (fallback)
+      - name: Load secrets from Vault (fallback)
         shell: bash
         env:
           VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
           VAULT_NAMESPACE: ${{ secrets.VAULT_NAMESPACE }}
         run: |
-          API="$VAULT_ADDR/v1/ci/data/artifactory"
-          curl -sS \
-            -H "X-Vault-Token: $VAULT_TOKEN" \
-            -H "X-Vault-Namespace: ${VAULT_NAMESPACE:-}" \
-            "$API" > secret.json
+          curl -sS -H "X-Vault-Token: $VAULT_TOKEN" -H "X-Vault-Namespace: ${VAULT_NAMESPACE:-}" \
+            "$VAULT_ADDR/v1/ci/data/artifactory" > secret.json
+          for var in url username password repo_docker; do
+            [[ -z "${!var^^}" ]] && echo "${var^^}=$(jq -r ".data.data.$var" secret.json)" >> "$GITHUB_ENV"
+          done
+          echo "::add-mask::$(jq -r '.data.data.password' secret.json)"
 
-          if [[ -z "${ARTIFACTORY_URL:-}" ]]; then
-            echo "ARTIFACTORY_URL=$(jq -r '.data.data.url' secret.json)" >> "$GITHUB_ENV"
-          fi
-          if [[ -z "${ARTIFACTORY_USERNAME:-}" ]]; then
-            echo "ARTIFACTORY_USERNAME=$(jq -r '.data.data.username' secret.json)" >> "$GITHUB_ENV"
-          fi
-          if [[ -z "${ARTIFACTORY_PASSWORD:-}" ]]; then
-            PW=$(jq -r '.data.data.password' secret.json)
-            echo "::add-mask::$PW"
-            echo "ARTIFACTORY_PASSWORD=$PW" >> "$GITHUB_ENV"
-          fi
-          if [[ -z "${DOCKER_REPO:-}" ]]; then
-            echo "DOCKER_REPO=$(jq -r '.data.data.repo_docker' secret.json)" >> "$GITHUB_ENV"
-          fi
-
-      - name: Check config and verify Artifactory
+      - name: Verify Artifactory access
         shell: bash
         run: |
           for v in ARTIFACTORY_URL ARTIFACTORY_USERNAME ARTIFACTORY_PASSWORD DOCKER_REPO; do
-            [[ -z "${!v:-}" ]] && { echo "Missing $v"; exit 1; }
+            [[ -z "${!v}" ]] && { echo "Missing $v"; exit 1; }
           done
-
-          RAW="$ARTIFACTORY_URL"
-          HOST="${RAW#http://}"; HOST="${HOST#https://}"; HOST="${HOST%%/*}"
+          HOST="${ARTIFACTORY_URL#http://}"; HOST="${HOST#https://}"; HOST="${HOST%%/*}"
           echo "REGISTRY_HOST=$HOST" >> "$GITHUB_ENV"
+          curl -s -o /dev/null -w "%{http_code}" \
+            -u "$ARTIFACTORY_USERNAME:$ARTIFACTORY_PASSWORD" \
+            "https://$HOST/artifactory/api/system/ping" | grep -q 200 || {
+              echo "Artifactory auth failed"; exit 1;
+            }
 
-          set +e
-          CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "Authorization: Bearer $ARTIFACTORY_PASSWORD" \
-            "https://$HOST/artifactory/api/system/ping")
-          if [[ "$CODE" != "200" ]]; then
-            CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-              -u "$ARTIFACTORY_USERNAME:$ARTIFACTORY_PASSWORD" \
-              "https://$HOST/artifactory/api/system/ping")
-          fi
-          set -e
-          [[ "$CODE" == "200" ]] || { echo "Artifactory auth failed"; exit 1; }
-
-      - name: Build and push image
+      - name: Build and push Docker image
         shell: bash
         run: |
           echo "$ARTIFACTORY_PASSWORD" | docker login "$REGISTRY_HOST" -u "$ARTIFACTORY_USERNAME" --password-stdin
@@ -106,26 +75,6 @@ jobs:
           echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
           docker build -t "$IMAGE" .
           docker push "$IMAGE"
-
-      - name: Deploy on Azure VM
-        shell: bash
-        env:
-          VM_HOST: ${{ secrets.VM_HOST }}
-          VM_USER: ${{ secrets.VM_USER }}
-          VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
-        run: |
-          [[ -n "$VM_HOST" ]] || { echo "Missing VM_HOST"; exit 1; }
-          mkdir -p ~/.ssh
-          echo "$VM_SSH_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key "$VM_USER@$VM_HOST" "
-            echo '$ARTIFACTORY_PASSWORD' | docker login $REGISTRY_HOST -u $ARTIFACTORY_USERNAME --password-stdin
-            docker pull $IMAGE
-            docker stop fastapi-app || true
-            docker rm fastapi-app || true
-            docker run -d --name fastapi-app -p 80:8080 $IMAGE
-          "
 
       - name: Azure login
         uses: azure/login@v1
@@ -142,13 +91,10 @@ jobs:
             --name "$WEBAPP" \
             --resource-group "$RG" \
             --settings WEBSITES_PORT=8080
-
           az webapp config container set \
-            --name "$WEBAPP" \
-            --resource-group "$RG" \
+            --name "$WEBAPP" --resource-group "$RG" \
             --docker-custom-image-name "$IMAGE" \
             --docker-registry-server-url "https://$REGISTRY_HOST" \
             --docker-registry-server-user "$ARTIFACTORY_USERNAME" \
             --docker-registry-server-password "$ARTIFACTORY_PASSWORD"
-
           az webapp restart --name "$WEBAPP" --resource-group "$RG"
