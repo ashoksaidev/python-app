@@ -20,16 +20,15 @@ jobs:
       - name: Install dependencies
         run: sudo apt-get update -y && sudo apt-get install -y jq curl
 
-      # Load secrets from GitHub if available
       - name: Load Artifactory secrets from GitHub
         shell: bash
         run: |
-          for var in ARTIFACTORY_URL ARTIFACTORY_USERNAME ARTIFACTORY_PASSWORD DOCKER_REPO; do
-            [[ -n "${{ secrets[$var] }}" ]] && echo "$var=${{ secrets[$var] }}" >> "$GITHUB_ENV"
-          done
+          echo "ARTIFACTORY_URL=${{ secrets.ARTIFACTORY_URL }}" >> "$GITHUB_ENV"
+          echo "ARTIFACTORY_USERNAME=${{ secrets.ARTIFACTORY_USERNAME }}" >> "$GITHUB_ENV"
           echo "::add-mask::${{ secrets.ARTIFACTORY_PASSWORD }}"
+          echo "ARTIFACTORY_PASSWORD=${{ secrets.ARTIFACTORY_PASSWORD }}" >> "$GITHUB_ENV"
+          echo "DOCKER_REPO=${{ secrets.DOCKER_REPO }}" >> "$GITHUB_ENV"
 
-      # Authenticate to Vault and fallback to Vault secrets if needed
       - name: Vault OIDC Authentication
         uses: hashicorp/vault-action@v3
         with:
