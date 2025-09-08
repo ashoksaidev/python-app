@@ -5,7 +5,7 @@
 # ------------------------------------------------------------------------------
 
 # === Stage 1: Build ===
-FROM python:3.11-slim AS build
+FROM python:3.13-slim AS build
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
@@ -28,7 +28,7 @@ RUN python -m venv /opt/venv \
 COPY src/ src/
 
 # === Stage 2: Runtime ===
-FROM python:3.11-slim AS runtime
+FROM python:3.13-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
